@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="UTF-8">
+  <title>توليد كلمة سر WiFi</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: 'Segoe UI', sans-serif;
+      background: linear-gradient(-45deg, #0f172a, #1e293b, #111827, #0f172a);
+      background-size: 400% 400%;
+      animation: gradient 10s ease infinite;
+      color: #e2e8f0;
+      height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      flex-direction: column;
+      text-align: center;
+    }
+
+    @keyframes gradient {
+      0% { background-position: 0% 50%; }
+      50% { background-position: 100% 50%; }
+      100% { background-position: 0% 50%; }
+    }
+
+    .box {
+      background: rgba(255, 255, 255, 0.05);
+      padding: 30px 20px;
+      border-radius: 20px;
+      backdrop-filter: blur(8px);
+      box-shadow: 0 0 20px rgba(255, 255, 255, 0.05);
+      width: 90%;
+      max-width: 400px;
+    }
+
+    input {
+      width: 100%;
+      padding: 12px;
+      margin-bottom: 10px;
+      border-radius: 10px;
+      border: none;
+      font-size: 16px;
+      background: #1e293b;
+      color: #f8fafc;
+    }
+
+    button {
+      padding: 10px 20px;
+      border: none;
+      background: #facc15;
+      color: #000;
+      font-weight: bold;
+      border-radius: 10px;
+      cursor: pointer;
+      margin: 5px;
+    }
+
+    #output {
+      margin-top: 20px;
+      font-size: 1.1rem;
+      color: #a5f3fc;
+      word-break: break-word;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="box">
+    <h2>🔐 WiFi Password Generator</h2>
+    <p>أدخل اسم الشبكة (SSID) بالشكل: fh_1a9700</p>
+    <input type="text" id="ssidInput" placeholder="fh_1a9700">
+    <button onclick="generatePassword()">🔍 توليد الباسورد</button>
+    <button onclick="copyPassword()">📋 نسخ</button>
+    <div id="output">Status: بانتظار الإدخال...</div>
+  </div>
+
+  <script>
+    const map = {
+      '0': 'f', '1': 'e', '2': 'd', '3': 'c',
+      '4': 'b', '5': 'a', '6': '9', '7': '8',
+      '8': '7', '9': '6', 'a': '5', 'b': '4',
+      'c': '3', 'd': '2', 'e': '1', 'f': '0'
+    };
+
+    let lastPassword = '';
+
+    function generatePassword() {
+      const input = document.getElementById('ssidInput').value.trim();
+      const output = document.getElementById('output');
+
+      const parts = input.split('_');
+      if (parts.length < 2 || !parts[1]) {
+        output.textContent = "⚠️ تأكد من كتابة الاسم بشكل: اسم_رموز";
+        return;
+      }
+
+      const hex = parts[1].toLowerCase();
+      let decoded = '';
+      for (let ch of hex) {
+        decoded += map[ch] || '?';
+      }
+
+      lastPassword = "wlan" + decoded;
+      output.textContent = `🔓 كلمة السر المقترحة: ${lastPassword}`;
+    }
+
+    function copyPassword() {
+      if (!lastPassword) return;
+      navigator.clipboard.writeText(lastPassword).then(() => {
+        alert("✅ تم نسخ الباسورد!");
+      });
+    }
+  </script>
+
+</body>
+</html>
