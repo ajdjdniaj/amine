@@ -249,18 +249,20 @@ def process_download(call):
     msg = bot.send_message(call.message.chat.id, "⏳ جاري التحميل، انتظر قليلاً...")
 
     try:
-        ydl_opts = {
-            'outtmpl': '%(title)s.%(ext)s',
-            'format': 'best',
-            'noplaylist': True,
-            'quiet': True,
-        }
-        if action == "audio":
-            ydl_opts['postprocessors'] = [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
-                'preferredquality': '192',
-            }]
+       ydl_opts = {
+    'outtmpl': '%(title)s.%(ext)s',
+    'format': 'best',
+    'noplaylist': True,
+    'quiet': True,
+}
+if "youtube.com" in url or "youtu.be" in url or "يوتيوب" in url:
+    ydl_opts['cookiefile'] = 'yt_cookies.txt'
+if action == "audio":
+    ydl_opts['postprocessors'] = [{
+        'key': 'FFmpegExtractAudio',
+        'preferredcodec': 'mp3',
+        'preferredquality': '192',
+    }]
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
             if action == "video":
