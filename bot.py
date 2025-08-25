@@ -239,19 +239,16 @@ markup.add(
     )
     send_platforms(message.chat.id)
 
-@bot.callback_query_handler(func=lambda call: call.data in ("video", "audio"))
+@bot.callback_query_handler(func=lambda call: call.data.startswith("video|") or call.data.startswith("audio|"))
 def process_download(call):
     if not check_access(call):
         return
-    url = user_links.get(call.from_user.id)
-    platform = user_platform.get(call.from_user.id, "المنصة")
-    info = user_video_info.get(call.from_user.id)
-    if not url:
-        bot.answer_callback_query(call.id, "❌ لم يتم العثور على رابط، أرسل الرابط من جديد.")
-        return
 
-    # فقط تيك توك يعمل
-    if platform != "تيك توك":
+    # استخراج نوع التحميل والرابط من callback_data
+    action, url = call.data.split("|", 1)
+
+    # تحقق أن الرابط من تيك توك فقط
+    if not ("tiktok" in url or "تيك توك" in url):
         bot.send_message(
             call.message.chat.id,
             "⚠️ هذه الخدمة في صيانة حاليًا. يرجى اختيار خدمة أخرى.",
@@ -259,7 +256,6 @@ def process_download(call):
         send_platforms(call.message.chat.id)
         return
 
-    action = call.data
     msg = bot.send_message(call.message.chat.id, "⏳ جاري التحميل، انتظر قليلاً...")
 
     try:
@@ -302,7 +298,6 @@ def process_download(call):
         reply_markup=markup
     )
     user_state[call.message.chat.id] = "waiting_link"
-
 # باقي كود الواي فاي كما هو...
 
 @bot.message_handler(func=lambda m: True)
