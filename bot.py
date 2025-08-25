@@ -249,20 +249,41 @@ def process_download(call):
     msg = bot.send_message(call.message.chat.id, "⏳ جاري التحميل، انتظر قليلاً...")
 
     try:
-       ydl_opts = {
-    'outtmpl': '%(title)s.%(ext)s',
-    'format': 'best',
-    'noplaylist': True,
-    'quiet': True,
-}
-if "youtube.com" in url or "youtu.be" in url or "يوتيوب" in url:
-    ydl_opts['cookiefile'] = 'yt_cookies.txt'
-if action == "audio":
-    ydl_opts['postprocessors'] = [{
-        'key': 'FFmpegExtractAudio',
-        'preferredcodec': 'mp3',
-        'preferredquality': '192',
-    }]
+        # خيارات خاصة بيوتيوب بدون كوكيز
+        if "youtube.com" in url or "youtu.be" in url or "يوتيوب" in url:
+            if action == "video":
+                ydl_opts = {
+                    'outtmpl': '%(title)s.%(ext)s',
+                    'format': 'bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]/best[height<=480]',
+                    'noplaylist': True,
+                    'quiet': True,
+                }
+            else:  # mp3
+                ydl_opts = {
+                    'outtmpl': '%(title)s.%(ext)s',
+                    'format': 'bestaudio[ext=m4a]/bestaudio/best',
+                    'noplaylist': True,
+                    'quiet': True,
+                    'postprocessors': [{
+                        'key': 'FFmpegExtractAudio',
+                        'preferredcodec': 'mp3',
+                        'preferredquality': '192',
+                    }]
+                }
+        else:
+            # باقي المنصات كما هو
+            ydl_opts = {
+                'outtmpl': '%(title)s.%(ext)s',
+                'format': 'best',
+                'noplaylist': True,
+                'quiet': True,
+            }
+            if action == "audio":
+                ydl_opts['postprocessors'] = [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'mp3',
+                    'preferredquality': '192',
+                }]
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
             if action == "video":
