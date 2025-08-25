@@ -67,8 +67,10 @@ def is_user_joined(user_id):
     try:
         member = bot.get_chat_member(f"@{CHANNEL_USERNAME}", user_id)
         return member.status in ['member', 'creator', 'administrator']
-    except:
-        return False
+    except Exception as e:
+        # لا تحظر المستخدم إذا لم تستطع التحقق (مثلاً بسبب خطأ في API)
+        print(f"تحذير: تعذر التحقق من عضوية المستخدم {user_id} في القناة: {e}")
+        return True  # اعتبره مشترك مؤقتًا ولا تحظره
 
 def ban_message(chat_id, ban_left=None):
     if ban_left is not None:
@@ -154,6 +156,15 @@ def choose_downloader(message):
 def ask_for_link(message):
     if not check_access(message):
         return
+    # إذا اختار يوتيوب أو انستغرام أرسل رسالة الصيانة وأعد القائمة
+    if message.text in ["يوتيوب", "انستغرام"]:
+        bot.send_message(
+            message.chat.id,
+            "⚠️ هذه الخدمة في صيانة حاليًا. يرجى اختيار خدمة أخرى.",
+        )
+        send_platforms(message.chat.id)
+        return
+    # فقط تيك توك يعمل بشكل عادي
     user_platform[message.from_user.id] = message.text
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
     markup.add("🔙 رجوع")
@@ -177,38 +188,7 @@ def back_handler(message):
     else:
         show_main_menu(message.chat.id, msg_only=True)
 
-# --- تحميل من يوتيوب عبر savefrom.net ---
-
-def get_savefrom_link(youtube_url, audio=False):
-    api_url = "https://worker.sf-tools.com/savefrom.php"
-    params = {
-        "sf_url": youtube_url,
-        "sf_submit": "",
-        "new": 2,
-        "lang": "ar",
-        "app": "",
-        "country": "ar",
-        "os": "Windows",
-        "browser": "Chrome"
-    }
-    headers = {
-        "User-Agent": "Mozilla/5.0"
-    }
-    resp = requests.post(api_url, data=params, headers=headers)
-    if resp.status_code == 200:
-        data = resp.json()
-        if "url" in data and data["url"]:
-            if isinstance(data["url"], list):
-                if audio:
-                    for item in data["url"]:
-                        if "mp3" in item.get("type", ""):
-                            return item["url"], "mp3"
-                for item in data["url"]:
-                    if "mp4" in item.get("type", ""):
-                        return item["url"], "mp4"
-            elif isinstance(data["url"], dict):
-                return data["url"].get("url"), data["url"].get("type", "mp4")
-    return None, None
+# باقي كود تيك توك/واي فاي كما هو في كودك...
 
 @bot.message_handler(func=lambda m: m.text and m.text.startswith("http"))
 def handle_link(message):
@@ -223,101 +203,107 @@ def handle_link(message):
     platform = user_platform.get(message.from_user.id)
     url = message.text.strip()
 
-    if (platform == "يوتيوب" and not ("youtube.com" in url or "youtu.be" in url or "يوتيوب" in url)) or \
-       (platform == "انستغرام" and not ("instagram" in url or "انستغرام" in url)) or \
-       (platform == "تيك توك" and not ("tiktok" in url or "تيك توك" in url)):
-        bot.send_message(
-            message.chat.id,
-            "❌ هذا الرابط لا يخص المنصة المختارة.\nيرجى اختيار المنصة الصحيحة من جديد.",
-        )
-        send_platforms(message.chat.id)
-        user_platform.pop(message.from_user.id, None)
-        return
-
-    user_links[message.from_user.id] = url
-
-    if platform == "يوتيوب":
+    # فقط تيك توك يعمل
+    if platform == "تيك توك":
+        caption = "🎬 اختر نوع التحميل:\n\n🎬 تحميل الفيديو (mp4)\n🎵 تحميل الصوت (mp3)"
         markup = types.InlineKeyboardMarkup()
         markup.add(
-            types.InlineKeyboardButton("🎬 تحميل الفيديو (mp4)", callback_data=f"yt_video|{url}"),
-            types.InlineKeyboardButton("🎵 تحميل الصوت (mp3)", callback_data=f"yt_audio|{url}")
+            types.InlineKeyboardButton("🎬 تحميل الفيديو", callback_data="video"),
+            types.InlineKeyboardButton("🎵 تحميل الصوت (mp3)", callback_data="audio")
         )
-        bot.send_message(message.chat.id, "🎬 اختر نوع التحميل:\n\n🎬 تحميل الفيديو (mp4)\n🎵 تحميل الصوت (mp3)", reply_markup=markup)
+        try:
+            with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
+                info = ydl.extract_info(url, download=False)
+                user_video_info[message.from_user.id] = info
+                title = info.get('title', 'بدون عنوان')
+                duration = info.get('duration', 0)
+                thumb = info.get('thumbnail')
+                mins = duration // 60
+                secs = duration % 60
+                caption = f"🎬 <b>{title}</b>\n⏱️ المدة: {mins}:{secs:02d}\n\n🎬 تحميل الفيديو (mp4) أو 🎵 تحميل الصوت (mp3):"
+        except Exception as e:
+            thumb = None
+
+        if thumb:
+            bot.send_photo(message.chat.id, thumb, caption=caption, parse_mode="HTML", reply_markup=markup)
+        else:
+            bot.send_message(message.chat.id, caption, parse_mode="HTML", reply_markup=markup)
+        bot.send_message(message.chat.id, "⬅️ للرجوع اضغط على زر 🔙 رجوع في الأسفل.", reply_markup=types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True).add("🔙 رجوع"))
+        user_state[message.chat.id] = "waiting_link"
         return
 
-    # باقي المنصات (انستغرام/تيك توك) كما هو في كودك
-    caption = "🎬 اختر نوع التحميل:\n\n🎬 تحميل الفيديو (mp4)\n🎵 تحميل الصوت (mp3)"
-    markup = types.InlineKeyboardMarkup()
-    markup.add(
-        types.InlineKeyboardButton("🎬 تحميل الفيديو", callback_data="video"),
-        types.InlineKeyboardButton("🎵 تحميل الصوت (mp3)", callback_data="audio")
+    # إذا حاول إرسال رابط لأي منصة أخرى (يوتيوب/انستغرام) أعد القائمة
+    bot.send_message(
+        message.chat.id,
+        "⚠️ هذه الخدمة في صيانة حاليًا. يرجى اختيار خدمة أخرى.",
     )
-    try:
-        with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
-            info = ydl.extract_info(url, download=False)
-            user_video_info[message.from_user.id] = info
-            title = info.get('title', 'بدون عنوان')
-            duration = info.get('duration', 0)
-            thumb = info.get('thumbnail')
-            mins = duration // 60
-            secs = duration % 60
-            caption = f"🎬 <b>{title}</b>\n⏱️ المدة: {mins}:{secs:02d}\n\n🎬 تحميل الفيديو (mp4) أو 🎵 تحميل الصوت (mp3):"
-    except Exception as e:
-        thumb = None
+    send_platforms(message.chat.id)
 
-    if thumb:
-        bot.send_photo(message.chat.id, thumb, caption=caption, parse_mode="HTML", reply_markup=markup)
-    else:
-        bot.send_message(message.chat.id, caption, parse_mode="HTML", reply_markup=markup)
-    bot.send_message(message.chat.id, "⬅️ للرجوع اضغط على زر 🔙 رجوع في الأسفل.", reply_markup=types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True).add("🔙 رجوع"))
-    user_state[message.chat.id] = "waiting_link"
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("yt_"))
-def process_youtube_download(call):
+@bot.callback_query_handler(func=lambda call: call.data in ("video", "audio"))
+def process_download(call):
     if not check_access(call):
         return
-    action, url = call.data.split("|", 1)
-    msg = bot.send_message(call.message.chat.id, "⏳ جاري التحميل من يوتيوب عبر موقع خارجي...")
+    url = user_links.get(call.from_user.id)
+    platform = user_platform.get(call.from_user.id, "المنصة")
+    info = user_video_info.get(call.from_user.id)
+    if not url:
+        bot.answer_callback_query(call.id, "❌ لم يتم العثور على رابط، أرسل الرابط من جديد.")
+        return
+
+    # فقط تيك توك يعمل
+    if platform != "تيك توك":
+        bot.send_message(
+            call.message.chat.id,
+            "⚠️ هذه الخدمة في صيانة حاليًا. يرجى اختيار خدمة أخرى.",
+        )
+        send_platforms(call.message.chat.id)
+        return
+
+    action = call.data
+    msg = bot.send_message(call.message.chat.id, "⏳ جاري التحميل، انتظر قليلاً...")
+
     try:
-        if action == "yt_audio":
-            download_url, filetype = get_savefrom_link(url, audio=True)
-        else:
-            download_url, filetype = get_savefrom_link(url, audio=False)
-        if not download_url:
-            bot.edit_message_text("❌ لم أستطع جلب رابط التحميل من يوتيوب. جرب لاحقًا.", call.message.chat.id, msg.message_id)
-            return
-        filename = "temp_download." + filetype
-        r = requests.get(download_url, stream=True)
-        with open(filename, "wb") as f:
-            for chunk in r.iter_content(chunk_size=8192):
-                if chunk:
-                    f.write(chunk)
-        with open(filename, "rb") as f:
-            if filetype == "mp3":
-                bot.send_audio(call.message.chat.id, f, caption="✅ تم التحميل من يوتيوب (mp3)!")
+        ydl_opts = {
+            'outtmpl': '%(title)s.%(ext)s',
+            'format': 'best',
+            'noplaylist': True,
+            'quiet': True,
+        }
+        if action == "audio":
+            ydl_opts['postprocessors'] = [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192',
+            }]
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            if action == "video":
+                filename = ydl.prepare_filename(info)
             else:
-                bot.send_video(call.message.chat.id, f, caption="✅ تم التحميل من يوتيوب (mp4)!")
+                filename = ydl.prepare_filename(info).rsplit('.', 1)[0] + ".mp3"
+        with open(filename, "rb") as f:
+            if action == "video":
+                bot.send_video(call.message.chat.id, f, caption="✅ تم التحميل بنجاح! 🎬")
+            else:
+                bot.send_audio(call.message.chat.id, f, caption="✅ تم التحميل بنجاح! 🎵")
         os.remove(filename)
         bot.delete_message(call.message.chat.id, msg.message_id)
     except Exception as e:
-        bot.edit_message_text(f"❌ حدث خطأ أثناء التحميل:\n{e}", call.message.chat.id, msg.message_id)
+        bot.edit_message_text(
+            "❌ حدث خطأ أثناء التحميل، يرجى إعادة المحاولة.",
+            call.message.chat.id, msg.message_id
+        )
 
-# باقي دوال تيك توك/انستغرام/واي فاي كما هي في كودك...
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+    markup.add("منصة أخرى", "نفس المنصة", "🔙 رجوع")
+    bot.send_message(
+        call.message.chat.id,
+        "💡 ماذا تريد أن تفعل الآن؟",
+        reply_markup=markup
+    )
+    user_state[call.message.chat.id] = "waiting_link"
 
-@bot.message_handler(func=lambda m: m.text in ["منصة أخرى", "نفس المنصة"])
-def next_action(message):
-    if not check_access(message):
-        return
-    if message.text == "منصة أخرى":
-        send_platforms(message.chat.id)
-    elif message.text == "نفس المنصة":
-        platform = user_platform.get(message.from_user.id, "المنصة")
-        markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
-        markup.add("🔙 رجوع")
-        bot.send_message(message.chat.id, f"📥 أرسل رابط الفيديو من {platform}:", reply_markup=markup)
-        user_state[message.chat.id] = "waiting_link"
-
-# ... باقي كود الواي فاي كما هو ...
+# باقي كود الواي فاي كما هو...
 
 @bot.message_handler(func=lambda m: True)
 def fallback_handler(message):
