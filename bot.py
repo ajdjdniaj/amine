@@ -13,7 +13,7 @@ from flask import Flask, request
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CHANNEL_USERNAME = "aie_tool_channel"  # بدون @
-WEBHOOK_URL = "https://wifi-bot-1.onrender.com/webhook"  # عدل الرابط حسب نطاق مشروعك في Render
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL")  # عدل الرابط حسب نطاق مشروعك في Render
 
 BAN_FILE = "banned.txt"
 BAN_DURATION = 24 * 60 * 60  # 24 ساعة بالثواني
