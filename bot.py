@@ -157,13 +157,12 @@ def choose_downloader(message):
 def ask_for_link(message):
     if not check_access(message):
         return
-    # إذا اختار يوتيوب أو انستغرام أرسل رسالة الصيانة وأعد القائمة فقط
+    # إذا اختار يوتيوب أو انستغرام أرسل رسالة الصيانة فقط
     if message.text in ["يوتيوب", "انستغرام"]:
         bot.send_message(
             message.chat.id,
             "⚠️ هذه الخدمة في صيانة حاليًا. يرجى اختيار منصة أخرى.",
         )
-        send_platforms(message.chat.id)
         return
     # فقط تيك توك يعمل بشكل عادي
     user_platform[message.from_user.id] = message.text
