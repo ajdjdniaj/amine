@@ -18,6 +18,8 @@ WEBHOOK_URL = os.environ.get("WEBHOOK_URL") # عدل الرابط حسب نطا�
 BAN_FILE = "banned.txt"
 BAN_DURATION = 24 * 60 * 60  # 24 ساعة بالثواني
 
+OWNER_ID = "5883400070"  # ايدي المالك
+
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
 
@@ -32,7 +34,7 @@ PLATFORMS = ["يوتيوب", "انستغرام", "تيك توك"]
 
 def is_banned(user_id):
     # تخطى الحظر للمالك
-    if str(user_id) == "5883400070":
+    if str(user_id) == OWNER_ID:
         return 0
     now = int(time.time())
     try:
@@ -46,6 +48,9 @@ def is_banned(user_id):
     return 0
 
 def ban_user(user_id):
+    # لا تحظر المالك
+    if str(user_id) == OWNER_ID:
+        return
     ban_until = int(time.time()) + BAN_DURATION
     lines = []
     try:
