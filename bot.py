@@ -24,8 +24,6 @@ OWNER_ID = "5883400070"  # ايدي المالك
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
 
-user_links = {}
-user_platform = {}
 user_video_info = {}
 user_state = {}
 
@@ -68,9 +66,8 @@ def is_user_joined(user_id):
         member = bot.get_chat_member(f"@{CHANNEL_USERNAME}", user_id)
         return member.status in ['member', 'creator', 'administrator']
     except Exception as e:
-        # لا تحظر المستخدم إذا لم تستطع التحقق (مثلاً بسبب خطأ في API)
         print(f"تحذير: تعذر التحقق من عضوية المستخدم {user_id} في القناة: {e}")
-        return True  # اعتبره مشترك مؤقتًا ولا تحظره
+        return True
 
 def ban_message(chat_id, ban_left=None):
     if ban_left is not None:
@@ -156,7 +153,6 @@ def choose_downloader(message):
 def ask_for_link(message):
     if not check_access(message):
         return
-    # إذا اختار يوتيوب أو انستغرام أرسل رسالة الصيانة وأعد القائمة
     if message.text in ["يوتيوب", "انستغرام"]:
         bot.send_message(
             message.chat.id,
@@ -165,11 +161,10 @@ def ask_for_link(message):
         send_platforms(message.chat.id)
         return
     # فقط تيك توك يعمل بشكل عادي
-    user_platform[message.from_user.id] = message.text
+    user_state[message.chat.id] = "waiting_link"
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
     markup.add("🔙 رجوع")
     bot.send_message(message.chat.id, f"📥 أرسل رابط الفيديو من {message.text}:", reply_markup=markup)
-    user_state[message.chat.id] = "waiting_link"
 
 @bot.message_handler(func=lambda m: m.text == "🔙 رجوع")
 def back_handler(message):
@@ -177,7 +172,6 @@ def back_handler(message):
         return
     state = user_state.get(message.chat.id, "main_menu")
     if state == "waiting_link":
-        user_platform.pop(message.from_user.id, None)
         send_platforms(message.chat.id)
     elif state == "platforms":
         show_main_menu(message.chat.id, msg_only=True)
@@ -187,8 +181,6 @@ def back_handler(message):
         show_wifi_methods(message.chat.id)
     else:
         show_main_menu(message.chat.id, msg_only=True)
-
-# باقي كود تيك توك/واي فاي كما هو في كودك...
 
 @bot.message_handler(func=lambda m: m.text and m.text.startswith("http"))
 def handle_link(message):
@@ -200,21 +192,18 @@ def handle_link(message):
         send_platforms(message.chat.id)
         return
 
-    platform = user_platform.get(message.from_user.id)
-    url = message.text.strip()
-
     # فقط تيك توك يعمل
-    if platform == "تيك توك":
+    url = message.text.strip()
+    if "tiktok" in url or "تيك توك" in url:
         caption = "🎬 اختر نوع التحميل:\n\n🎬 تحميل الفيديو (mp4)\n🎵 تحميل الصوت (mp3)"
-       markup = types.InlineKeyboardMarkup()
-markup.add(
-    types.InlineKeyboardButton("🎬 تحميل الفيديو", callback_data=f"video|{url}"),
-    types.InlineKeyboardButton("🎵 تحميل الصوت (mp3)", callback_data=f"audio|{url}")
-)
+        markup = types.InlineKeyboardMarkup()
+        markup.add(
+            types.InlineKeyboardButton("🎬 تحميل الفيديو", callback_data=f"video|{url}"),
+            types.InlineKeyboardButton("🎵 تحميل الصوت (mp3)", callback_data=f"audio|{url}")
+        )
         try:
             with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
                 info = ydl.extract_info(url, download=False)
-                user_video_info[message.from_user.id] = info
                 title = info.get('title', 'بدون عنوان')
                 duration = info.get('duration', 0)
                 thumb = info.get('thumbnail')
@@ -298,6 +287,7 @@ def process_download(call):
         reply_markup=markup
     )
     user_state[call.message.chat.id] = "waiting_link"
+
 # باقي كود الواي فاي كما هو...
 
 @bot.message_handler(func=lambda m: True)
@@ -320,6 +310,8 @@ def webhook():
 
 @app.route('/')
 def index():
+    bot.remove_webhook()
+    bot.set_webhook(url=WEBHOOK_URL)
     return "Webhook set!", 200
 
 if __name__ == '__main__':
