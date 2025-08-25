@@ -206,11 +206,11 @@ def handle_link(message):
     # فقط تيك توك يعمل
     if platform == "تيك توك":
         caption = "🎬 اختر نوع التحميل:\n\n🎬 تحميل الفيديو (mp4)\n🎵 تحميل الصوت (mp3)"
-        markup = types.InlineKeyboardMarkup()
-        markup.add(
-            types.InlineKeyboardButton("🎬 تحميل الفيديو", callback_data="video"),
-            types.InlineKeyboardButton("🎵 تحميل الصوت (mp3)", callback_data="audio")
-        )
+       markup = types.InlineKeyboardMarkup()
+markup.add(
+    types.InlineKeyboardButton("🎬 تحميل الفيديو", callback_data=f"video|{url}"),
+    types.InlineKeyboardButton("🎵 تحميل الصوت (mp3)", callback_data=f"audio|{url}")
+)
         try:
             with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
                 info = ydl.extract_info(url, download=False)
