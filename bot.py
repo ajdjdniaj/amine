@@ -88,6 +88,9 @@ def ban_message(chat_id, ban_left=None):
 
 def check_access(message):
     user_id = message.from_user.id
+    # استثناء المالك من كل الشروط
+    if str(user_id) == "5883400070":
+        return True
     ban_left = is_banned(user_id)
     if ban_left > 0:
         ban_message(message.chat.id, ban_left)
