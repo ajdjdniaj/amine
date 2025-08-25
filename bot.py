@@ -63,6 +63,9 @@ def ban_user(user_id):
         f.writelines(lines)
 
 def is_user_joined(user_id):
+    # استثناء المالك من التحقق من القناة
+    if str(user_id) == "5883400070":
+        return True
     try:
         member = bot.get_chat_member(f"@{CHANNEL_USERNAME}", user_id)
         return member.status in ['member', 'creator', 'administrator']
