@@ -153,18 +153,20 @@ def choose_downloader(message):
 def ask_for_link(message):
     if not check_access(message):
         return
+    # إذا اختار يوتيوب أو انستغرام أرسل رسالة الصيانة وأعد القائمة فقط
     if message.text in ["يوتيوب", "انستغرام"]:
         bot.send_message(
             message.chat.id,
-            "⚠️ هذه الخدمة في صيانة حاليًا. يرجى اختيار خدمة أخرى.",
+            "⚠️ هذه الخدمة في صيانة حاليًا.\nيرجى اختيار منصة أخرى.",
         )
         send_platforms(message.chat.id)
         return
     # فقط تيك توك يعمل بشكل عادي
-    user_state[message.chat.id] = "waiting_link"
+    user_platform[message.from_user.id] = message.text
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
     markup.add("🔙 رجوع")
     bot.send_message(message.chat.id, f"📥 أرسل رابط الفيديو من {message.text}:", reply_markup=markup)
+    user_state[message.chat.id] = "waiting_link"
 
 @bot.message_handler(func=lambda m: m.text == "🔙 رجوع")
 def back_handler(message):
@@ -172,6 +174,7 @@ def back_handler(message):
         return
     state = user_state.get(message.chat.id, "main_menu")
     if state == "waiting_link":
+        user_platform.pop(message.from_user.id, None)
         send_platforms(message.chat.id)
     elif state == "platforms":
         show_main_menu(message.chat.id, msg_only=True)
