@@ -31,6 +31,9 @@ PLATFORMS = ["يوتيوب", "انستغرام", "تيك توك"]
 # --- دوال الحظر والتحقق من القناة ---
 
 def is_banned(user_id):
+    # تخطى الحظر للمالك
+    if str(user_id) == "5883400070":
+        return 0
     now = int(time.time())
     try:
         with open(BAN_FILE, "r") as f:
