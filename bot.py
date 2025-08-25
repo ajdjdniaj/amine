@@ -24,6 +24,7 @@ OWNER_ID = "5883400070"  # ايدي المالك
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
 
+user_platform = {}
 user_video_info = {}
 user_state = {}
 
@@ -174,7 +175,8 @@ def back_handler(message):
         return
     state = user_state.get(message.chat.id, "main_menu")
     if state == "waiting_link":
-        user_platform.pop(message.from_user.id, None)
+        if message.from_user.id in user_platform:
+            user_platform.pop(message.from_user.id)
         send_platforms(message.chat.id)
     elif state == "platforms":
         show_main_menu(message.chat.id, msg_only=True)
@@ -195,9 +197,10 @@ def handle_link(message):
         send_platforms(message.chat.id)
         return
 
-    # فقط تيك توك يعمل
+    platform = user_platform.get(message.from_user.id)
     url = message.text.strip()
-    if "tiktok" in url or "تيك توك" in url:
+
+    if platform == "تيك توك" and ("tiktok" in url or "تيك توك" in url):
         caption = "🎬 اختر نوع التحميل:\n\n🎬 تحميل الفيديو (mp4)\n🎵 تحميل الصوت (mp3)"
         markup = types.InlineKeyboardMarkup()
         markup.add(
@@ -227,7 +230,7 @@ def handle_link(message):
     # إذا حاول إرسال رابط لأي منصة أخرى (يوتيوب/انستغرام) أعد القائمة
     bot.send_message(
         message.chat.id,
-        "⚠️ هذه الخدمة في صيانة حاليًا. يرجى اختيار خدمة أخرى.",
+        "⚠️ هذه الخدمة في صيانة حاليًا.\nيرجى اختيار منصة أخرى.",
     )
     send_platforms(message.chat.id)
 
@@ -236,14 +239,12 @@ def process_download(call):
     if not check_access(call):
         return
 
-    # استخراج نوع التحميل والرابط من callback_data
     action, url = call.data.split("|", 1)
 
-    # تحقق أن الرابط من تيك توك فقط
     if not ("tiktok" in url or "تيك توك" in url):
         bot.send_message(
             call.message.chat.id,
-            "⚠️ هذه الخدمة في صيانة حاليًا. يرجى اختيار خدمة أخرى.",
+            "⚠️ هذه الخدمة في صيانة حاليًا.\nيرجى اختيار منصة أخرى.",
         )
         send_platforms(call.message.chat.id)
         return
@@ -297,7 +298,7 @@ def process_download(call):
 def fallback_handler(message):
     if not check_access(message):
         return
-    show_main_menu(message.chat.id, msg_only=False)
+    show_main_menu(message.chat.id, msg_only=True)
 
 # ----------------- Webhook Flask -----------------
 
