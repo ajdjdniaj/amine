@@ -480,7 +480,7 @@ def generate_password(message):
 def fallback_handler(message):
     if not check_access(message):
         return
-    show_main_menu(message.chat.id, msg_only=True)
+    show_main_menu(message.chat.id, msg_only=False)  # دائماً أرسل رسالة الترحيب مع القائمة الرئيسية
 
 # ----------------- Webhook Flask -----------------
 
