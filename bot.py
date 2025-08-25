@@ -496,8 +496,6 @@ def webhook():
 
 @app.route('/')
 def index():
-    bot.remove_webhook()
-    bot.set_webhook(url=WEBHOOK_URL)
     return "Webhook set!", 200
 
 if __name__ == '__main__':
