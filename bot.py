@@ -63,14 +63,15 @@ def ban_user(user_id):
         f.writelines(lines)
 
 def is_user_joined(user_id):
-    # استثناء المالك من التحقق من القناة
-    if str(user_id) == "5883400070":
+    if str(user_id) == OWNER_ID:
         return True
     try:
         member = bot.get_chat_member(f"@{CHANNEL_USERNAME}", user_id)
         return member.status in ['member', 'creator', 'administrator']
-    except:
-        return False
+    except Exception as e:
+        # إذا لم يستطع التحقق لأي سبب، اعتبره مشترك مؤقتًا ولا تحظره
+        print(f"تحذير: تعذر التحقق من عضوية المستخدم {user_id} في القناة: {e}")
+        return True
 
 def ban_message(chat_id, ban_left=None):
     if ban_left is not None:
