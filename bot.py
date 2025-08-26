@@ -134,7 +134,7 @@ def send_platforms(chat_id):
     markup.add("🔙 رجوع")
     bot.send_message(
         chat_id,
-        " ",  # رسالة فارغة أو فراغ فقط
+        "يرجى اختيار منصة:",  # نص واضح بدل رسالة فارغة
         reply_markup=markup
     )
     user_state[chat_id] = "platforms"
