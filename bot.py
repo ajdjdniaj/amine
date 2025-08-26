@@ -143,6 +143,17 @@ def send_platforms(chat_id):
 def start_handler(message):
     if not check_access(message):
         return
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+    markup.add("🚀 Start")
+    bot.send_message(
+        message.chat.id,
+        "👋 أهلاً بك في البوت الشامل!\n\nاضغط على زر 🚀 Start للمتابعة 👇",
+        reply_markup=markup
+    )
+    user_state[message.chat.id] = "start"
+
+@bot.message_handler(func=lambda m: m.text == "🚀 Start")
+def handle_start_button(message):
     show_main_menu(message.chat.id)
 
 @bot.message_handler(func=lambda m: m.text == "🎬 أداة تحميل mp3/mp4")
