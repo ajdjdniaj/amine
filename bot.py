@@ -134,10 +134,7 @@ def send_platforms(chat_id):
     markup.add("🔙 رجوع")
     bot.send_message(
         chat_id,
-        "✨ اختر المنصة التي تريد التحميل منها:\n"
-        "0️⃣ يوتيوب: تحميل فيديوهات يوتيوب (mp4 أو mp3).\n"
-        "1️⃣ انستغرام: تحميل فيديوهات أو ريلز انستغرام (mp4 أو mp3).\n"
-        "2️⃣ تيك توك: تحميل فيديوهات تيك توك بدون علامة مائية (mp4 أو mp3).",
+        " ",  # رسالة فارغة أو فراغ فقط
         reply_markup=markup
     )
     user_state[chat_id] = "platforms"
@@ -152,13 +149,24 @@ def start_handler(message):
 def choose_downloader(message):
     if not check_access(message):
         return
-    send_platforms(message.chat.id)
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+    for p in PLATFORMS:
+        markup.add(p)
+    markup.add("🔙 رجوع")
+    bot.send_message(
+        message.chat.id,
+        "✨ اختر المنصة التي تريد التحميل منها:\n"
+        "0️⃣ يوتيوب: تحميل فيديوهات يوتيوب (mp4 أو mp3).\n"
+        "1️⃣ انستغرام: تحميل فيديوهات أو ريلز انستغرام (mp4 أو mp3).\n"
+        "2️⃣ تيك توك: تحميل فيديوهات تيك توك بدون علامة مائية (mp4 أو mp3).",
+        reply_markup=markup
+    )
+    user_state[message.chat.id] = "platforms"
 
 @bot.message_handler(func=lambda m: m.text in PLATFORMS)
 def ask_for_link(message):
     if not check_access(message):
         return
-    # إذا اختار يوتيوب أو انستغرام أرسل رسالة الصيانة ثم قائمة المنصات فقط
     if message.text in ["يوتيوب", "انستغرام"]:
         bot.send_message(
             message.chat.id,
@@ -166,7 +174,6 @@ def ask_for_link(message):
         )
         send_platforms(message.chat.id)
         return
-    # فقط تيك توك يعمل بشكل عادي
     user_platform[message.from_user.id] = message.text
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
     markup.add("🔙 رجوع")
