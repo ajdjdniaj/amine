@@ -186,7 +186,8 @@ def back_handler(message):
         return
     state = user_state.get(message.chat.id, "main_menu")
     if state == "waiting_link":
-        user_platform.pop(message.from_user.id, None)
+        if message.from_user.id in user_platform:
+            user_platform.pop(message.from_user.id)
         send_platforms(message.chat.id)
     elif state == "platforms":
         show_main_menu(message.chat.id, msg_only=True)
