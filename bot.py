@@ -20,6 +20,8 @@ BAN_DURATION = 24 * 60 * 60  # 24 ساعة بالثواني
 
 OWNER_ID = "5883400070"  # ايدي المالك
 
+USERS_FILE = "users.txt"
+
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
 
@@ -33,7 +35,6 @@ PLATFORMS = ["يوتيوب", "انستغرام", "تيك توك"]
 # --- دوال الحظر والتحقق من القناة ---
 
 def is_banned(user_id):
-    # تخطى الحظر للمالك
     if str(user_id) == OWNER_ID:
         return 0
     now = int(time.time())
@@ -42,13 +43,12 @@ def is_banned(user_id):
             for line in f:
                 uid, ban_until = line.strip().split(":")
                 if str(user_id) == uid and now < int(ban_until):
-                    return int(ban_until) - now  # كم باقي من الحظر
+                    return int(ban_until) - now
     except FileNotFoundError:
         pass
     return 0
 
 def ban_user(user_id):
-    # لا تحظر المالك
     if str(user_id) == OWNER_ID:
         return
     ban_until = int(time.time()) + BAN_DURATION
@@ -69,9 +69,8 @@ def is_user_joined(user_id):
         member = bot.get_chat_member(f"@{CHANNEL_USERNAME}", user_id)
         return member.status in ['member', 'creator', 'administrator']
     except Exception as e:
-        # إذا لم يستطع التحقق لأي سبب، اعتبره مشترك مؤقتًا ولا تحظره
         print(f"تحذير: تعذر التحقق من عضوية المستخدم {user_id} في القناة: {e}")
-        return True
+        return False  # مهم: لا نسمح بالدخول إذا لم نستطع التحقق
 
 def ban_message(chat_id, ban_left=None):
     if ban_left is not None:
@@ -90,20 +89,48 @@ def ban_message(chat_id, ban_left=None):
         )
     )
 
-def check_access(message):
+def send_join_message(chat_id):
+    markup = types.InlineKeyboardMarkup()
+    markup.add(
+        types.InlineKeyboardButton("📢 انضم للقناة", url=f"https://t.me/{CHANNEL_USERNAME}"),
+        types.InlineKeyboardButton("✅ تحقق", callback_data="check_join")
+    )
+    bot.send_message(
+        chat_id,
+        f"🚫 لا يمكنك استخدام البوت إلا بعد الانضمام إلى القناة:\n\n"
+        f"https://t.me/{CHANNEL_USERNAME}\n\n"
+        f"بعد الانضمام اضغط زر ✅ تحقق.",
+        reply_markup=markup
+    )
+
+def check_access(message, silent=False):
     user_id = message.from_user.id
-    # استثناء المالك من كل الشروط
-    if str(user_id) == "5883400070":
+    if str(user_id) == OWNER_ID:
         return True
     ban_left = is_banned(user_id)
     if ban_left > 0:
-        ban_message(message.chat.id, ban_left)
+        if not silent:
+            ban_message(message.chat.id, ban_left)
         return False
     if not is_user_joined(user_id):
-        ban_user(user_id)
-        ban_message(message.chat.id)
+        if not silent:
+            send_join_message(message.chat.id)
         return False
     return True
+
+def save_user(user_id):
+    try:
+        if not os.path.exists(USERS_FILE):
+            with open(USERS_FILE, "w") as f:
+                f.write(f"{user_id}\n")
+        else:
+            with open(USERS_FILE, "r") as f:
+                users = f.read().splitlines()
+            if str(user_id) not in users:
+                with open(USERS_FILE, "a") as f:
+                    f.write(f"{user_id}\n")
+    except Exception as e:
+        print(f"خطأ في حفظ المستخدم: {e}")
 
 # --- واجهة البوت ---
 
@@ -134,14 +161,20 @@ def send_platforms(chat_id):
     markup.add("🔙 رجوع")
     bot.send_message(
         chat_id,
-        "يرجى اختيار منصة:",  # نص واضح بدل رسالة فارغة
+        "يرجى اختيار منصة:",
         reply_markup=markup
     )
     user_state[chat_id] = "platforms"
 
 @bot.message_handler(commands=['start'])
 def start_handler(message):
-    if not check_access(message):
+    user_id = message.from_user.id
+    save_user(user_id)
+    if is_banned(user_id):
+        ban_message(message.chat.id, is_banned(user_id))
+        return
+    if not is_user_joined(user_id):
+        send_join_message(message.chat.id)
         return
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
     markup.add("🚀 Start")
@@ -152,8 +185,40 @@ def start_handler(message):
     )
     user_state[message.chat.id] = "start"
 
+@bot.callback_query_handler(func=lambda call: call.data == "check_join")
+def check_join_callback(call):
+    user_id = call.from_user.id
+    if is_banned(user_id):
+        ban_message(call.message.chat.id, is_banned(user_id))
+        return
+    if is_user_joined(user_id):
+        bot.answer_callback_query(call.id, "✅ تم التحقق! يمكنك الآن استخدام البوت.")
+        markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+        markup.add("🚀 Start")
+        bot.send_message(
+            call.message.chat.id,
+            "✅ تم التحقق من اشتراكك في القناة!\n\nاضغط على زر 🚀 Start للمتابعة 👇",
+            reply_markup=markup
+        )
+        user_state[call.message.chat.id] = "start"
+    else:
+        ban_user(user_id)
+        bot.answer_callback_query(call.id, "❌ لم يتم العثور على اشتراكك في القناة. تم حظرك لمدة 24 ساعة.")
+        ban_message(call.message.chat.id)
+
+@bot.message_handler(commands=['get_users'])
+def get_users_handler(message):
+    if str(message.from_user.id) != OWNER_ID:
+        return
+    if not os.path.exists(USERS_FILE):
+        bot.send_message(message.chat.id, "لا يوجد مستخدمين بعد.")
+        return
+    with open(USERS_FILE, "rb") as f:
+        bot.send_document(message.chat.id, f, caption="قائمة معرفات المستخدمين.")
+
 @bot.message_handler(func=lambda m: m.text == "🚀 Start")
 def handle_start_button(message):
+    save_user(message.from_user.id)
     show_main_menu(message.chat.id)
 
 @bot.message_handler(func=lambda m: m.text == "🎬 أداة تحميل mp3/mp4")
@@ -222,7 +287,6 @@ def handle_link(message):
     platform = user_platform.get(message.from_user.id)
     url = message.text.strip()
 
-    # تحقق من تطابق الرابط مع المنصة المختارة
     if (platform == "يوتيوب" and not ("youtube.com" in url or "youtu.be" in url or "يوتيوب" in url)) or \
        (platform == "انستغرام" and not ("instagram" in url or "انستغرام" in url)) or \
        (platform == "تيك توك" and not ("tiktok" in url or "تيك توك" in url)):
@@ -242,7 +306,6 @@ def handle_link(message):
         types.InlineKeyboardButton("🎬 تحميل الفيديو", callback_data="video"),
         types.InlineKeyboardButton("🎵 تحميل الصوت (mp3)", callback_data="audio")
     )
-    # جلب معلومات الفيديو (لإظهار العنوان والصورة فقط)
     try:
         with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -523,7 +586,7 @@ def generate_password(message):
 def fallback_handler(message):
     if not check_access(message):
         return
-    show_main_menu(message.chat.id, msg_only=False)  # دائماً أرسل رسالة الترحيب مع القائمة الرئيسية
+    show_main_menu(message.chat.id, msg_only=False)
 
 # ----------------- Webhook Flask -----------------
 
