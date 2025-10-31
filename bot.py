@@ -253,6 +253,53 @@ def get_users_handler(message):
     with open(USERS_FILE, "rb") as f:
         bot.send_document(message.chat.id, f, caption="قائمة معرفات المستخدمين.")
 
+@bot.message_handler(commands=['ban_user'])
+def ban_user_command(message):
+    if str(message.from_user.id) != OWNER_ID:
+        return
+    try:
+        parts = message.text.split()
+        if len(parts) != 2:
+            bot.reply_to(message, "استخدم الأمر بهذا الشكل:\n/ban_user user_id")
+            return
+        user_id = parts[1]
+        # حظر لمدة 100 سنة
+        ban_until = int(time.time()) + 100*365*24*60*60
+        lines = []
+        try:
+            with open(BAN_FILE, "r") as f:
+                lines = [line for line in f if not line.startswith(str(user_id) + ":")]
+        except FileNotFoundError:
+            pass
+        lines.append(f"{user_id}:{ban_until}\n")
+        with open(BAN_FILE, "w") as f:
+            f.writelines(lines)
+        bot.reply_to(message, f"تم حظر المستخدم {user_id} نهائيًا.")
+    except Exception as e:
+        bot.reply_to(message, "حدث خطأ أثناء الحظر.")
+
+@bot.message_handler(commands=['unban_user'])
+def unban_user_command(message):
+    if str(message.from_user.id) != OWNER_ID:
+        return
+    try:
+        parts = message.text.split()
+        if len(parts) != 2:
+            bot.reply_to(message, "استخدم الأمر بهذا الشكل:\n/unban_user user_id")
+            return
+        user_id = parts[1]
+        lines = []
+        try:
+            with open(BAN_FILE, "r") as f:
+                lines = [line for line in f if not line.startswith(str(user_id) + ":")]
+        except FileNotFoundError:
+            pass
+        with open(BAN_FILE, "w") as f:
+            f.writelines(lines)
+        bot.reply_to(message, f"تم إلغاء الحظر عن المستخدم {user_id}.")
+    except Exception as e:
+        bot.reply_to(message, "حدث خطأ أثناء إلغاء الحظر.")
+        
 # --- تحقق مركزي في كل دالة رئيسية ---
 
 @bot.message_handler(func=lambda m: m.text == "🎬 أداة تحميل mp3/mp4")
