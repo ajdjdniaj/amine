@@ -70,53 +70,7 @@ def is_user_joined(user_id):
         return member.status in ['member', 'creator', 'administrator']
     except Exception as e:
         print(f"تحذير: تعذر التحقق من عضوية المستخدم {user_id} في القناة: {e}")
-        return False  # مهم: لا نسمح بالدخول إذا لم نستطع التحقق
-
-def ban_message(chat_id, ban_left=None):
-    if ban_left is not None:
-        hours = ban_left // 3600
-        minutes = (ban_left % 3600) // 60
-        time_msg = f"\nالوقت المتبقي: {hours} ساعة و {minutes} دقيقة."
-    else:
-        time_msg = ""
-    bot.send_message(
-        chat_id,
-        f"❌ تم حظرك من استخدام البوت لمدة 24 ساعة بسبب خروجك من القناة أو التحايل على البوت.{time_msg}\n\n"
-        f"يمكنك تصحيح ذلك بالانضمام مجددًا للقناة ثم الانتظار حتى انتهاء مدة الحظر.\n"
-        f"رابط القناة: https://t.me/{CHANNEL_USERNAME}",
-        reply_markup=types.InlineKeyboardMarkup().add(
-            types.InlineKeyboardButton("📢 انضم للقناة", url=f"https://t.me/{CHANNEL_USERNAME}")
-        )
-    )
-
-def send_join_message(chat_id):
-    markup = types.InlineKeyboardMarkup()
-    markup.add(
-        types.InlineKeyboardButton("📢 انضم للقناة", url=f"https://t.me/{CHANNEL_USERNAME}"),
-        types.InlineKeyboardButton("✅ تحقق", callback_data="check_join")
-    )
-    bot.send_message(
-        chat_id,
-        f"🚫 لا يمكنك استخدام البوت إلا بعد الانضمام إلى القناة:\n\n"
-        f"https://t.me/{CHANNEL_USERNAME}\n\n"
-        f"بعد الانضمام اضغط زر ✅ تحقق.",
-        reply_markup=markup
-    )
-
-def check_access(message, silent=False):
-    user_id = message.from_user.id
-    if str(user_id) == OWNER_ID:
-        return True
-    ban_left = is_banned(user_id)
-    if ban_left > 0:
-        if not silent:
-            ban_message(message.chat.id, ban_left)
         return False
-    if not is_user_joined(user_id):
-        if not silent:
-            send_join_message(message.chat.id)
-        return False
-    return True
 
 def save_user(user_id):
     try:
@@ -131,6 +85,38 @@ def save_user(user_id):
                     f.write(f"{user_id}\n")
     except Exception as e:
         print(f"خطأ في حفظ المستخدم: {e}")
+
+def send_welcome_with_channel(chat_id):
+    markup = types.InlineKeyboardMarkup()
+    markup.add(
+        types.InlineKeyboardButton("📢 انضم للقناة", url=f"https://t.me/{CHANNEL_USERNAME}"),
+        types.InlineKeyboardButton("🚀 Start", callback_data="try_start")
+    )
+    bot.send_message(
+        chat_id,
+        f"👋 أهلاً بك في البوت الشامل!\n\n"
+        f"لاستخدام البوت يجب الانضمام أولاً إلى القناة التالية:\n"
+        f"https://t.me/{CHANNEL_USERNAME}\n\n"
+        f"بعد الانضمام اضغط على زر 🚀 Start.",
+        reply_markup=markup
+    )
+
+def send_ban_with_check(chat_id, ban_left):
+    hours = ban_left // 3600
+    minutes = (ban_left % 3600) // 60
+    markup = types.InlineKeyboardMarkup()
+    markup.add(
+        types.InlineKeyboardButton("📢 انضم للقناة", url=f"https://t.me/{CHANNEL_USERNAME}"),
+        types.InlineKeyboardButton("✅ تحقق من جديد", callback_data="recheck")
+    )
+    bot.send_message(
+        chat_id,
+        f"❌ تم حظرك من استخدام البوت لمدة 24 ساعة بسبب عدم الانضمام للقناة.\n"
+        f"الوقت المتبقي: {hours} ساعة و {minutes} دقيقة.\n\n"
+        f"انضم للقناة ثم اضغط تحقق من جديد بعد انتهاء الحظر.\n"
+        f"رابط القناة: https://t.me/{CHANNEL_USERNAME}",
+        reply_markup=markup
+    )
 
 # --- واجهة البوت ---
 
@@ -170,41 +156,51 @@ def send_platforms(chat_id):
 def start_handler(message):
     user_id = message.from_user.id
     save_user(user_id)
-    if is_banned(user_id):
-        ban_message(message.chat.id, is_banned(user_id))
+    ban_left = is_banned(user_id)
+    if ban_left > 0:
+        send_ban_with_check(message.chat.id, ban_left)
         return
-    if not is_user_joined(user_id):
-        send_join_message(message.chat.id)
-        return
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
-    markup.add("🚀 Start")
-    bot.send_message(
-        message.chat.id,
-        "👋 أهلاً بك في البوت الشامل!\n\nاضغط على زر 🚀 Start للمتابعة 👇",
-        reply_markup=markup
-    )
-    user_state[message.chat.id] = "start"
+    send_welcome_with_channel(message.chat.id)
 
-@bot.callback_query_handler(func=lambda call: call.data == "check_join")
-def check_join_callback(call):
+@bot.callback_query_handler(func=lambda call: call.data == "try_start")
+def try_start_callback(call):
     user_id = call.from_user.id
-    if is_banned(user_id):
-        ban_message(call.message.chat.id, is_banned(user_id))
+    ban_left = is_banned(user_id)
+    if ban_left > 0:
+        send_ban_with_check(call.message.chat.id, ban_left)
         return
     if is_user_joined(user_id):
-        bot.answer_callback_query(call.id, "✅ تم التحقق! يمكنك الآن استخدام البوت.")
         markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
-        markup.add("🚀 Start")
+        markup.add("🎬 أداة تحميل mp3/mp4", "📡 أداة اختراق WiFi fh")
         bot.send_message(
             call.message.chat.id,
-            "✅ تم التحقق من اشتراكك في القناة!\n\nاضغط على زر 🚀 Start للمتابعة 👇",
+            "✅ تم التحقق من اشتراكك في القناة!\n\nاختر الخدمة التي تريد استخدامها:",
             reply_markup=markup
         )
-        user_state[call.message.chat.id] = "start"
+        user_state[call.message.chat.id] = "main_menu"
     else:
         ban_user(user_id)
-        bot.answer_callback_query(call.id, "❌ لم يتم العثور على اشتراكك في القناة. تم حظرك لمدة 24 ساعة.")
-        ban_message(call.message.chat.id)
+        send_ban_with_check(call.message.chat.id, BAN_DURATION)
+
+@bot.callback_query_handler(func=lambda call: call.data == "recheck")
+def recheck_callback(call):
+    user_id = call.from_user.id
+    ban_left = is_banned(user_id)
+    if ban_left > 0:
+        send_ban_with_check(call.message.chat.id, ban_left)
+        return
+    if is_user_joined(user_id):
+        markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+        markup.add("🎬 أداة تحميل mp3/mp4", "📡 أداة اختراق WiFi fh")
+        bot.send_message(
+            call.message.chat.id,
+            "✅ تم التحقق من اشتراكك في القناة!\n\nاختر الخدمة التي تريد استخدامها:",
+            reply_markup=markup
+        )
+        user_state[call.message.chat.id] = "main_menu"
+    else:
+        ban_user(user_id)
+        send_ban_with_check(call.message.chat.id, BAN_DURATION)
 
 @bot.message_handler(commands=['get_users'])
 def get_users_handler(message):
@@ -216,15 +212,8 @@ def get_users_handler(message):
     with open(USERS_FILE, "rb") as f:
         bot.send_document(message.chat.id, f, caption="قائمة معرفات المستخدمين.")
 
-@bot.message_handler(func=lambda m: m.text == "🚀 Start")
-def handle_start_button(message):
-    save_user(message.from_user.id)
-    show_main_menu(message.chat.id)
-
 @bot.message_handler(func=lambda m: m.text == "🎬 أداة تحميل mp3/mp4")
 def choose_downloader(message):
-    if not check_access(message):
-        return
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
     for p in PLATFORMS:
         markup.add(p)
@@ -241,8 +230,6 @@ def choose_downloader(message):
 
 @bot.message_handler(func=lambda m: m.text in PLATFORMS)
 def ask_for_link(message):
-    if not check_access(message):
-        return
     if message.text in ["يوتيوب", "انستغرام"]:
         bot.send_message(
             message.chat.id,
@@ -258,8 +245,6 @@ def ask_for_link(message):
 
 @bot.message_handler(func=lambda m: m.text == "🔙 رجوع")
 def back_handler(message):
-    if not check_access(message):
-        return
     state = user_state.get(message.chat.id, "main_menu")
     if state == "waiting_link":
         if message.from_user.id in user_platform:
@@ -276,8 +261,6 @@ def back_handler(message):
 
 @bot.message_handler(func=lambda m: m.text and m.text.startswith("http"))
 def handle_link(message):
-    if not check_access(message):
-        return
     state = user_state.get(message.chat.id)
     if state != "waiting_link":
         bot.send_message(message.chat.id, "❗ يرجى اختيار المنصة أولاً من القائمة بالأسفل.")
@@ -328,8 +311,6 @@ def handle_link(message):
 
 @bot.callback_query_handler(func=lambda call: call.data in ("video", "audio"))
 def process_download(call):
-    if not check_access(call):
-        return
     url = user_links.get(call.from_user.id)
     platform = user_platform.get(call.from_user.id, "المنصة")
     info = user_video_info.get(call.from_user.id)
@@ -383,8 +364,6 @@ def process_download(call):
 
 @bot.message_handler(func=lambda m: m.text in ["منصة أخرى", "نفس المنصة"])
 def next_action(message):
-    if not check_access(message):
-        return
     if message.text == "منصة أخرى":
         send_platforms(message.chat.id)
     elif message.text == "نفس المنصة":
@@ -410,14 +389,10 @@ def show_wifi_methods(chat_id):
 
 @bot.message_handler(func=lambda m: m.text == "📡 أداة اختراق WiFi fh")
 def wifi_request(message):
-    if not check_access(message):
-        return
     show_wifi_methods(message.chat.id)
 
 @bot.message_handler(func=lambda m: m.text == "✍️ كتابة اسم الراوتر")
 def manual_ssid(message):
-    if not check_access(message):
-        return
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add("🔙 رجوع")
     sent = bot.send_message(message.chat.id, "🔍 أرسل اسم شبكة WiFi (يجب أن تبدأ بـ fh_):", reply_markup=markup)
@@ -425,8 +400,6 @@ def manual_ssid(message):
     user_state[message.chat.id] = "wifi_name_or_image"
 
 def generate_password_with_back(message):
-    if not check_access(message):
-        return
     if message.text == "🔙 رجوع":
         show_wifi_methods(message.chat.id)
         return
@@ -434,8 +407,6 @@ def generate_password_with_back(message):
 
 @bot.message_handler(func=lambda m: m.text == "🖼️ صورة لجميع الراوترات")
 def ask_for_wifi_image(message):
-    if not check_access(message):
-        return
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add("🔙 رجوع")
     sent = bot.send_message(message.chat.id, "📸 أرسل صورة لقائمة شبكات WiFi الظاهرة في إعدادات هاتفك *الراوترات المدعومة التي تبدا ب fh فقط*.", reply_markup=markup)
@@ -443,8 +414,6 @@ def ask_for_wifi_image(message):
     user_state[message.chat.id] = "wifi_name_or_image"
 
 def process_wifi_image_with_back(message):
-    if not check_access(message):
-        return
     if message.text == "🔙 رجوع":
         show_wifi_methods(message.chat.id)
         return
@@ -452,8 +421,6 @@ def process_wifi_image_with_back(message):
 
 @bot.message_handler(func=lambda m: m.text == "🔁 اختراق WiFi آخر")
 def another_wifi(message):
-    if not check_access(message):
-        return
     show_wifi_methods(message.chat.id)
 
 def extract_ssids_from_text(text):
@@ -472,8 +439,6 @@ def smart_correct_ssid(ssid):
 
 @bot.message_handler(content_types=['photo'])
 def process_wifi_image(message):
-    if not check_access(message):
-        return
     wait_msg = bot.send_message(message.chat.id, "⏳ جاري معالجة الصورة، يرجى الانتظار...")
 
     def try_extract(image):
@@ -584,8 +549,6 @@ def generate_password(message):
 
 @bot.message_handler(func=lambda m: True)
 def fallback_handler(message):
-    if not check_access(message):
-        return
     show_main_menu(message.chat.id, msg_only=False)
 
 # ----------------- Webhook Flask -----------------
