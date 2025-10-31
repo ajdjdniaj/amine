@@ -90,7 +90,7 @@ def send_welcome_with_channel(chat_id):
     markup = types.InlineKeyboardMarkup()
     markup.add(
         types.InlineKeyboardButton("📢 انضم للقناة", url=f"https://t.me/{CHANNEL_USERNAME}"),
-        types.InlineKeyboardButton("🚀 Start", callback_data="try_start")
+        types.InlineKeyboardButton("✅ تحقق", callback_data="check_join")
     )
     bot.send_message(
         chat_id,
@@ -101,7 +101,7 @@ https://t.me/{CHANNEL_USERNAME}
 
 ⚠️ *تنبيه مهم*: إذا لم تنضم للقناة وحاولت استخدام البوت، سيتم حظرك لمدة 24 ساعة تلقائياً ولن تستطيع استخدام البوت حتى انتهاء مدة الحظر.
 
-بعد الانضمام للقناة اضغط على زر 🚀 Start بالأسفل للمتابعة.""",
+بعد الانضمام للقناة اضغط على زر ✅ تحقق بالأسفل للمتابعة.""",
         reply_markup=markup,
         parse_mode="Markdown"
     )
@@ -122,6 +122,37 @@ def send_ban_with_check(chat_id, ban_left):
         f"رابط القناة: https://t.me/{CHANNEL_USERNAME}",
         reply_markup=markup
     )
+
+def send_warning_join(chat_id):
+    markup = types.InlineKeyboardMarkup()
+    markup.add(
+        types.InlineKeyboardButton("📢 انضم للقناة", url=f"https://t.me/{CHANNEL_USERNAME}"),
+        types.InlineKeyboardButton("✅ تحقق", callback_data="check_join")
+    )
+    bot.send_message(
+        chat_id,
+        f"""⚠️ يجب عليك الانضمام إلى القناة أولاً حتى تتمكن من استخدام البوت.
+
+إذا لم تنضم للقناة وحاولت استخدام البوت مرة أخرى، سيتم حظرك لمدة 24 ساعة.
+
+رابط القناة: https://t.me/{CHANNEL_USERNAME}
+
+بعد الانضمام اضغط على زر ✅ تحقق.""",
+        reply_markup=markup
+    )
+
+# تحقق مركزي في كل دالة رئيسية
+def check_access(message):
+    user_id = message.from_user.id
+    ban_left = is_banned(user_id)
+    if ban_left > 0:
+        send_ban_with_check(message.chat.id, ban_left)
+        return False
+    if not is_user_joined(user_id):
+        ban_user(user_id)
+        send_ban_with_check(message.chat.id, BAN_DURATION)
+        return False
+    return True
 
 # --- واجهة البوت ---
 
@@ -167,8 +198,8 @@ def start_handler(message):
         return
     send_welcome_with_channel(message.chat.id)
 
-@bot.callback_query_handler(func=lambda call: call.data == "try_start")
-def try_start_callback(call):
+@bot.callback_query_handler(func=lambda call: call.data == "check_join")
+def check_join_callback(call):
     user_id = call.from_user.id
     ban_left = is_banned(user_id)
     if ban_left > 0:
@@ -184,8 +215,13 @@ def try_start_callback(call):
         )
         user_state[call.message.chat.id] = "main_menu"
     else:
-        ban_user(user_id)
-        send_ban_with_check(call.message.chat.id, BAN_DURATION)
+        # أول مرة فقط تحذير، إذا ضغط تحقق مرة أخرى ولم يشترك يتم الحظر
+        if user_state.get(call.message.chat.id) == "warned":
+            ban_user(user_id)
+            send_ban_with_check(call.message.chat.id, BAN_DURATION)
+        else:
+            send_warning_join(call.message.chat.id)
+            user_state[call.message.chat.id] = "warned"
 
 @bot.callback_query_handler(func=lambda call: call.data == "recheck")
 def recheck_callback(call):
@@ -217,8 +253,12 @@ def get_users_handler(message):
     with open(USERS_FILE, "rb") as f:
         bot.send_document(message.chat.id, f, caption="قائمة معرفات المستخدمين.")
 
+# --- تحقق مركزي في كل دالة رئيسية ---
+
 @bot.message_handler(func=lambda m: m.text == "🎬 أداة تحميل mp3/mp4")
 def choose_downloader(message):
+    if not check_access(message):
+        return
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
     for p in PLATFORMS:
         markup.add(p)
@@ -235,6 +275,8 @@ def choose_downloader(message):
 
 @bot.message_handler(func=lambda m: m.text in PLATFORMS)
 def ask_for_link(message):
+    if not check_access(message):
+        return
     if message.text in ["يوتيوب", "انستغرام"]:
         bot.send_message(
             message.chat.id,
@@ -250,6 +292,8 @@ def ask_for_link(message):
 
 @bot.message_handler(func=lambda m: m.text == "🔙 رجوع")
 def back_handler(message):
+    if not check_access(message):
+        return
     state = user_state.get(message.chat.id, "main_menu")
     if state == "waiting_link":
         if message.from_user.id in user_platform:
@@ -266,6 +310,8 @@ def back_handler(message):
 
 @bot.message_handler(func=lambda m: m.text and m.text.startswith("http"))
 def handle_link(message):
+    if not check_access(message):
+        return
     state = user_state.get(message.chat.id)
     if state != "waiting_link":
         bot.send_message(message.chat.id, "❗ يرجى اختيار المنصة أولاً من القائمة بالأسفل.")
@@ -316,6 +362,8 @@ def handle_link(message):
 
 @bot.callback_query_handler(func=lambda call: call.data in ("video", "audio"))
 def process_download(call):
+    if not check_access(call):
+        return
     url = user_links.get(call.from_user.id)
     platform = user_platform.get(call.from_user.id, "المنصة")
     info = user_video_info.get(call.from_user.id)
@@ -369,6 +417,8 @@ def process_download(call):
 
 @bot.message_handler(func=lambda m: m.text in ["منصة أخرى", "نفس المنصة"])
 def next_action(message):
+    if not check_access(message):
+        return
     if message.text == "منصة أخرى":
         send_platforms(message.chat.id)
     elif message.text == "نفس المنصة":
@@ -394,10 +444,14 @@ def show_wifi_methods(chat_id):
 
 @bot.message_handler(func=lambda m: m.text == "📡 أداة اختراق WiFi fh")
 def wifi_request(message):
+    if not check_access(message):
+        return
     show_wifi_methods(message.chat.id)
 
 @bot.message_handler(func=lambda m: m.text == "✍️ كتابة اسم الراوتر")
 def manual_ssid(message):
+    if not check_access(message):
+        return
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add("🔙 رجوع")
     sent = bot.send_message(message.chat.id, "🔍 أرسل اسم شبكة WiFi (يجب أن تبدأ بـ fh_):", reply_markup=markup)
@@ -405,6 +459,8 @@ def manual_ssid(message):
     user_state[message.chat.id] = "wifi_name_or_image"
 
 def generate_password_with_back(message):
+    if not check_access(message):
+        return
     if message.text == "🔙 رجوع":
         show_wifi_methods(message.chat.id)
         return
@@ -412,6 +468,8 @@ def generate_password_with_back(message):
 
 @bot.message_handler(func=lambda m: m.text == "🖼️ صورة لجميع الراوترات")
 def ask_for_wifi_image(message):
+    if not check_access(message):
+        return
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add("🔙 رجوع")
     sent = bot.send_message(message.chat.id, "📸 أرسل صورة لقائمة شبكات WiFi الظاهرة في إعدادات هاتفك *الراوترات المدعومة التي تبدا ب fh فقط*.", reply_markup=markup)
@@ -419,6 +477,8 @@ def ask_for_wifi_image(message):
     user_state[message.chat.id] = "wifi_name_or_image"
 
 def process_wifi_image_with_back(message):
+    if not check_access(message):
+        return
     if message.text == "🔙 رجوع":
         show_wifi_methods(message.chat.id)
         return
@@ -426,6 +486,8 @@ def process_wifi_image_with_back(message):
 
 @bot.message_handler(func=lambda m: m.text == "🔁 اختراق WiFi آخر")
 def another_wifi(message):
+    if not check_access(message):
+        return
     show_wifi_methods(message.chat.id)
 
 def extract_ssids_from_text(text):
@@ -444,6 +506,8 @@ def smart_correct_ssid(ssid):
 
 @bot.message_handler(content_types=['photo'])
 def process_wifi_image(message):
+    if not check_access(message):
+        return
     wait_msg = bot.send_message(message.chat.id, "⏳ جاري معالجة الصورة، يرجى الانتظار...")
 
     def try_extract(image):
@@ -514,6 +578,8 @@ def generate_wifi_password(ssid):
     return f"wlan{encoded}"
 
 def generate_password(message):
+    if not check_access(message):
+        return
     ssid = message.text.strip().lower()
     if not ssid.startswith("fh_"):
         markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
@@ -554,6 +620,8 @@ def generate_password(message):
 
 @bot.message_handler(func=lambda m: True)
 def fallback_handler(message):
+    if not check_access(message):
+        return
     show_main_menu(message.chat.id, msg_only=False)
 
 # ----------------- Webhook Flask -----------------
