@@ -21,6 +21,7 @@ BAN_DURATION = 24 * 60 * 60  # 24 ساعة بالثواني
 OWNER_ID = "5883400070"  # ايدي المالك
 
 USERS_FILE = "users.txt"
+JOINED_USERS_FILE = "joined_users.txt"
 
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
@@ -86,6 +87,32 @@ def save_user(user_id):
     except Exception as e:
         print(f"خطأ في حفظ المستخدم: {e}")
 
+# --- دوال من نفذوا الشرط (دخل القناة مرة واحدة على الأقل) ---
+
+def save_joined_user(user_id):
+    try:
+        if not os.path.exists(JOINED_USERS_FILE):
+            with open(JOINED_USERS_FILE, "w") as f:
+                f.write(f"{user_id}\n")
+        else:
+            with open(JOINED_USERS_FILE, "r") as f:
+                users = f.read().splitlines()
+            if str(user_id) not in users:
+                with open(JOINED_USERS_FILE, "a") as f:
+                    f.write(f"{user_id}\n")
+    except Exception as e:
+        print(f"خطأ في حفظ المنفذين للشرط: {e}")
+
+def has_joined_before(user_id):
+    try:
+        if not os.path.exists(JOINED_USERS_FILE):
+            return False
+        with open(JOINED_USERS_FILE, "r") as f:
+            users = f.read().splitlines()
+        return str(user_id) in users
+    except Exception as e:
+        return False
+
 def send_welcome_with_channel(chat_id):
     markup = types.InlineKeyboardMarkup()
     markup.add(
@@ -99,7 +126,7 @@ def send_welcome_with_channel(chat_id):
 🔒 لاستخدام البوت يجب عليك أولاً الانضمام إلى القناة الرسمية:
 https://t.me/{CHANNEL_USERNAME}
 
-⚠️ *تنبيه مهم*: إذا لم تنضم للقناة وحاولت استخدام البوت، سيتم حظرك لمدة 24 ساعة تلقائياً ولن تستطيع استخدام البوت حتى انتهاء مدة الحظر.
+⚠️ *تنبيه مهم*: إذا لم تنضم للقناة وحاولت استخدام البوت، لن تستطيع استخدام البوت حتى تنضم. إذا دخلت القناة ثم خرجت منها لاحقًا سيتم حظرك لمدة 24 ساعة.
 
 بعد الانضمام للقناة اضغط على زر ✅ تحقق بالأسفل للمتابعة.""",
         reply_markup=markup,
@@ -116,7 +143,7 @@ def send_ban_with_check(chat_id, ban_left):
     )
     bot.send_message(
         chat_id,
-        f"❌ تم حظرك من استخدام البوت لمدة 24 ساعة بسبب عدم الانضمام للقناة.\n"
+        f"❌ تم حظرك من استخدام البوت لمدة 24 ساعة بسبب خروجك من القناة بعد تنفيذ الشرط.\n"
         f"الوقت المتبقي: {hours} ساعة و {minutes} دقيقة.\n\n"
         f"انضم للقناة ثم اضغط تحقق من جديد بعد انتهاء الحظر.\n"
         f"رابط القناة: https://t.me/{CHANNEL_USERNAME}",
@@ -133,7 +160,7 @@ def send_warning_join(chat_id):
         chat_id,
         f"""⚠️ يجب عليك الانضمام إلى القناة أولاً حتى تتمكن من استخدام البوت.
 
-إذا لم تنضم للقناة وحاولت استخدام البوت مرة أخرى، سيتم حظرك لمدة 24 ساعة.
+لن تستطيع استخدام البوت حتى تنضم للقناة.
 
 رابط القناة: https://t.me/{CHANNEL_USERNAME}
 
@@ -149,10 +176,92 @@ def check_access(message):
         send_ban_with_check(message.chat.id, ban_left)
         return False
     if not is_user_joined(user_id):
-        ban_user(user_id)
-        send_ban_with_check(message.chat.id, BAN_DURATION)
+        if has_joined_before(user_id):
+            ban_user(user_id)
+            send_ban_with_check(message.chat.id, BAN_DURATION)
+        else:
+            send_warning_join(message.chat.id)
         return False
     return True
+
+# --- أوامر المالك للحصول على الملفات ---
+
+@bot.message_handler(commands=['get_users'])
+def get_users_handler(message):
+    if str(message.from_user.id) != OWNER_ID:
+        return
+    if not os.path.exists(USERS_FILE):
+        bot.send_message(message.chat.id, "لا يوجد مستخدمين بعد.")
+        return
+    with open(USERS_FILE, "rb") as f:
+        bot.send_document(message.chat.id, f, caption="قائمة معرفات المستخدمين.")
+
+@bot.message_handler(commands=['get_banned'])
+def get_banned_handler(message):
+    if str(message.from_user.id) != OWNER_ID:
+        return
+    if not os.path.exists(BAN_FILE):
+        bot.send_message(message.chat.id, "لا يوجد ملف banned.txt بعد.")
+        return
+    with open(BAN_FILE, "rb") as f:
+        bot.send_document(message.chat.id, f, caption="قائمة المحظورين.")
+
+@bot.message_handler(commands=['get_joined'])
+def get_joined_handler(message):
+    if str(message.from_user.id) != OWNER_ID:
+        return
+    if not os.path.exists(JOINED_USERS_FILE):
+        bot.send_message(message.chat.id, "لا يوجد ملف joined_users.txt بعد.")
+        return
+    with open(JOINED_USERS_FILE, "rb") as f:
+        bot.send_document(message.chat.id, f, caption="قائمة من نفذوا الشرط.")
+
+@bot.message_handler(commands=['ban_user'])
+def ban_user_command(message):
+    if str(message.from_user.id) != OWNER_ID:
+        return
+    try:
+        parts = message.text.split()
+        if len(parts) != 2:
+            bot.reply_to(message, "استخدم الأمر بهذا الشكل:\n/ban_user user_id")
+            return
+        user_id = parts[1]
+        # حظر لمدة 100 سنة
+        ban_until = int(time.time()) + 100*365*24*60*60
+        lines = []
+        try:
+            with open(BAN_FILE, "r") as f:
+                lines = [line for line in f if not line.startswith(str(user_id) + ":")]
+        except FileNotFoundError:
+            pass
+        lines.append(f"{user_id}:{ban_until}\n")
+        with open(BAN_FILE, "w") as f:
+            f.writelines(lines)
+        bot.reply_to(message, f"تم حظر المستخدم {user_id} نهائيًا.")
+    except Exception as e:
+        bot.reply_to(message, "حدث خطأ أثناء الحظر.")
+
+@bot.message_handler(commands=['unban_user'])
+def unban_user_command(message):
+    if str(message.from_user.id) != OWNER_ID:
+        return
+    try:
+        parts = message.text.split()
+        if len(parts) != 2:
+            bot.reply_to(message, "استخدم الأمر بهذا الشكل:\n/unban_user user_id")
+            return
+        user_id = parts[1]
+        lines = []
+        try:
+            with open(BAN_FILE, "r") as f:
+                lines = [line for line in f if not line.startswith(str(user_id) + ":")]
+        except FileNotFoundError:
+            pass
+        with open(BAN_FILE, "w") as f:
+            f.writelines(lines)
+        bot.reply_to(message, f"تم إلغاء الحظر عن المستخدم {user_id}.")
+    except Exception as e:
+        bot.reply_to(message, "حدث خطأ أثناء إلغاء الحظر.")
 
 # --- واجهة البوت ---
 
@@ -206,6 +315,7 @@ def check_join_callback(call):
         send_ban_with_check(call.message.chat.id, ban_left)
         return
     if is_user_joined(user_id):
+        save_joined_user(user_id)  # سجل أنه نفذ الشرط
         markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
         markup.add("🎬 أداة تحميل mp3/mp4", "📡 أداة اختراق WiFi fh")
         bot.send_message(
@@ -215,8 +325,7 @@ def check_join_callback(call):
         )
         user_state[call.message.chat.id] = "main_menu"
     else:
-        # أول مرة فقط تحذير، إذا ضغط تحقق مرة أخرى ولم يشترك يتم الحظر
-        if user_state.get(call.message.chat.id) == "warned":
+        if has_joined_before(user_id):
             ban_user(user_id)
             send_ban_with_check(call.message.chat.id, BAN_DURATION)
         else:
@@ -231,6 +340,7 @@ def recheck_callback(call):
         send_ban_with_check(call.message.chat.id, ban_left)
         return
     if is_user_joined(user_id):
+        save_joined_user(user_id)
         markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
         markup.add("🎬 أداة تحميل mp3/mp4", "📡 أداة اختراق WiFi fh")
         bot.send_message(
@@ -243,64 +353,7 @@ def recheck_callback(call):
         ban_user(user_id)
         send_ban_with_check(call.message.chat.id, BAN_DURATION)
 
-@bot.message_handler(commands=['get_users'])
-def get_users_handler(message):
-    if str(message.from_user.id) != OWNER_ID:
-        return
-    if not os.path.exists(USERS_FILE):
-        bot.send_message(message.chat.id, "لا يوجد مستخدمين بعد.")
-        return
-    with open(USERS_FILE, "rb") as f:
-        bot.send_document(message.chat.id, f, caption="قائمة معرفات المستخدمين.")
-
-@bot.message_handler(commands=['ban_user'])
-def ban_user_command(message):
-    if str(message.from_user.id) != OWNER_ID:
-        return
-    try:
-        parts = message.text.split()
-        if len(parts) != 2:
-            bot.reply_to(message, "استخدم الأمر بهذا الشكل:\n/ban_user user_id")
-            return
-        user_id = parts[1]
-        # حظر لمدة 100 سنة
-        ban_until = int(time.time()) + 100*365*24*60*60
-        lines = []
-        try:
-            with open(BAN_FILE, "r") as f:
-                lines = [line for line in f if not line.startswith(str(user_id) + ":")]
-        except FileNotFoundError:
-            pass
-        lines.append(f"{user_id}:{ban_until}\n")
-        with open(BAN_FILE, "w") as f:
-            f.writelines(lines)
-        bot.reply_to(message, f"تم حظر المستخدم {user_id} نهائيًا.")
-    except Exception as e:
-        bot.reply_to(message, "حدث خطأ أثناء الحظر.")
-
-@bot.message_handler(commands=['unban_user'])
-def unban_user_command(message):
-    if str(message.from_user.id) != OWNER_ID:
-        return
-    try:
-        parts = message.text.split()
-        if len(parts) != 2:
-            bot.reply_to(message, "استخدم الأمر بهذا الشكل:\n/unban_user user_id")
-            return
-        user_id = parts[1]
-        lines = []
-        try:
-            with open(BAN_FILE, "r") as f:
-                lines = [line for line in f if not line.startswith(str(user_id) + ":")]
-        except FileNotFoundError:
-            pass
-        with open(BAN_FILE, "w") as f:
-            f.writelines(lines)
-        bot.reply_to(message, f"تم إلغاء الحظر عن المستخدم {user_id}.")
-    except Exception as e:
-        bot.reply_to(message, "حدث خطأ أثناء إلغاء الحظر.")
-        
-# --- تحقق مركزي في كل دالة رئيسية ---
+# --- أدوات التحميل ---
 
 @bot.message_handler(func=lambda m: m.text == "🎬 أداة تحميل mp3/mp4")
 def choose_downloader(message):
