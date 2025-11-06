@@ -3,3 +3,4 @@ pyTelegramBotAPI
 pytesseract
 Pillow
 yt-dlp
+psycopg2-binary
