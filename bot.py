@@ -1,4 +1,4 @@
-# bot.py (نسخة كاملة مع Connection Pool و CSV exports)
+# bot.py (نسخة كاملة مع Connection Pool و CSV exports و is_user_joined)
 import os
 import time
 import tempfile
@@ -10,6 +10,7 @@ import logging
 from flask import Flask, request
 import telebot
 from telebot import types
+import telebot.apihelper
 
 import yt_dlp
 from PIL import Image
@@ -174,6 +175,32 @@ def has_joined_before(user_id):
                 return cur.fetchone() is not None
     finally:
         put_db_conn(conn)
+
+# ===== دالة التحقق من اشتراك المستخدم (مضافة) =====
+def is_user_joined(user_id):
+    """
+    التحقق من اشتراك المستخدم في القناة.
+    يعيد True إذا العضو موجود (member/creator/administrator)، وإلا False.
+    يكتب في اللوق أي استثناء (مثلاً لو البوت ليس مشرفًا أو CHANNEL_USERNAME خاطئ).
+    """
+    try:
+        # المالك دائمًا مسموح له
+        if int(user_id) == OWNER_ID:
+            return True
+
+        # استدعاء API لفحص العضوية
+        # تأكد أن CHANNEL_USERNAME هو username القناة بدون @
+        member = bot.get_chat_member(f"@{CHANNEL_USERNAME}", int(user_id))
+        status = getattr(member, "status", None)
+        logging.info("get_chat_member(%s) => status=%s", user_id, status)
+        return status in ('member', 'creator', 'administrator')
+    except telebot.apihelper.ApiException as e:
+        # يحدث هذا غالبًا لو أن البوت ليس مشرفًا أو اسم القناة خاطئ أو البوت محظور
+        logging.exception("ApiException in is_user_joined — تأكد أن البوت مشرف و CHANNEL_USERNAME صحيح: %s", e)
+        return False
+    except Exception as e:
+        logging.exception("Unexpected error in is_user_joined: %s", e)
+        return False
 
 # ===== رسائل واجهة الاشتراك =====
 def send_welcome_with_channel(chat_id):
@@ -458,6 +485,7 @@ def check_join_callback(call):
             )
         except Exception as e:
             # لو فشل التعديل، رُسل رسالة عادية
+            logging.exception("edit_message_text failed in check_join_callback: %s", e)
             bot.send_message(call.message.chat.id, "✅ تم التحقق من اشتراكك في القناة!\n\nاختر الخدمة التي تريد استخدامها:", reply_markup=markup)
         user_state[call.message.chat.id] = "main_menu"
     else:
@@ -499,7 +527,6 @@ def recheck_callback(call):
     else:
         ban_user(user_id)
         send_ban_with_check(call.message.chat.id, BAN_DURATION)
-
 
 @bot.message_handler(func=lambda m: m.text == "🎬 أداة تحميل mp3/mp4")
 def choose_downloader(message):
