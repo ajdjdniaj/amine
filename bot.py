@@ -432,16 +432,32 @@ def start_handler(message):
 
 @bot.callback_query_handler(func=lambda call: call.data == "check_join")
 def check_join_callback(call):
-    if not check_access(call):
-        return
+    # أجب فورًا على الـ callback حتى يتوقف العميل عن الإعادة
+    try:
+        bot.answer_callback_query(call.id, text="جاري التحقق...")  # رسالة قصيرة للمستخدم (اختياري)
+    except Exception:
+        pass
+
+    # الآن نفّذ باقي المنطق
     user_id = call.from_user.id
+    ban_left = is_banned(user_id)
+    if ban_left > 0:
+        send_ban_with_check(call.message.chat.id, ban_left)
+        return
+
     if is_user_joined(user_id):
         save_joined_user(user_id)
         markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
         markup.add("🎬 أداة تحميل mp3/mp4", "📡 أداة اختراق WiFi fh")
         try:
-            bot.edit_message_text("✅ تم التحقق من اشتراكك في القناة!\n\nاختر الخدمة التي تريد استخدامها:", call.message.chat.id, call.message.message_id, reply_markup=markup)
-        except Exception:
+            bot.edit_message_text(
+                "✅ تم التحقق من اشتراكك في القناة!\n\nاختر الخدمة التي تريد استخدامها:",
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                reply_markup=markup
+            )
+        except Exception as e:
+            # لو فشل التعديل، رُسل رسالة عادية
             bot.send_message(call.message.chat.id, "✅ تم التحقق من اشتراكك في القناة!\n\nاختر الخدمة التي تريد استخدامها:", reply_markup=markup)
         user_state[call.message.chat.id] = "main_menu"
     else:
@@ -452,23 +468,38 @@ def check_join_callback(call):
             send_warning_join(call.message.chat.id)
             user_state[call.message.chat.id] = "warned"
 
+
 @bot.callback_query_handler(func=lambda call: call.data == "recheck")
 def recheck_callback(call):
-    if not check_access(call):
-        return
+    try:
+        bot.answer_callback_query(call.id, text="جاري إعادة التحقق...")
+    except Exception:
+        pass
+
     user_id = call.from_user.id
+    ban_left = is_banned(user_id)
+    if ban_left > 0:
+        send_ban_with_check(call.message.chat.id, ban_left)
+        return
+
     if is_user_joined(user_id):
         save_joined_user(user_id)
         markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
         markup.add("🎬 أداة تحميل mp3/mp4", "📡 أداة اختراق WiFi fh")
         try:
-            bot.edit_message_text("✅ تم التحقق من اشتراكك في القناة!\n\nاختر الخدمة التي تريد استخدامها:", call.message.chat.id, call.message.message_id, reply_markup=markup)
+            bot.edit_message_text(
+                "✅ تم التحقق من اشتراكك في القناة!\n\nاختر الخدمة التي تريد استخدامها:",
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                reply_markup=markup
+            )
         except Exception:
             bot.send_message(call.message.chat.id, "✅ تم التحقق من اشتراكك في القناة!\n\nاختر الخدمة التي تريد استخدامها:", reply_markup=markup)
         user_state[call.message.chat.id] = "main_menu"
     else:
         ban_user(user_id)
         send_ban_with_check(call.message.chat.id, BAN_DURATION)
+
 
 @bot.message_handler(func=lambda m: m.text == "🎬 أداة تحميل mp3/mp4")
 def choose_downloader(message):
