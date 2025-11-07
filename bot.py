@@ -335,14 +335,41 @@ def get_banned_handler(message):
             bot.send_message(message.chat.id, "لا يوجد محظورين.")
             return
 
+        # أنشئ ملف CSV مؤقت
         fd, path = tempfile.mkstemp(suffix=".csv")
         try:
             with os.fdopen(fd, "w", newline='', encoding='utf-8') as csvfile:
                 writer = csv.writer(csvfile)
                 writer.writerow(["user_id", "ban_until_epoch", "ban_until_readable"])
                 for r in rows:
-                    readable = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(int(r['ban_until']))) if r['ban_until'] else ""
-                    writer.writerow([r['user_id'], r['ban_until'], readable])
+                    bu = r.get('ban_until')
+                    # افحص نوع القيمة وتعامل معها
+                    if bu is None:
+                        epoch_val = ""
+                        readable = ""
+                    else:
+                        # لو كانت قيمة من نوع datetime (Postgres timestamp) -> حولها
+                        try:
+                            # psycopg يعود عادة بكائن datetime للـ timestamp
+                            from datetime import datetime
+                            if isinstance(bu, datetime):
+                                epoch_val = int(bu.timestamp())
+                                readable = bu.strftime('%Y-%m-%d %H:%M:%S')
+                            else:
+                                # لو كانت نص أو رقم (epoch)
+                                try:
+                                    epoch_val = int(bu)
+                                    readable = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(epoch_val))
+                                except Exception:
+                                    # كحل افتراضي: حوّل إلى نص
+                                    epoch_val = str(bu)
+                                    readable = str(bu)
+                        except Exception:
+                            epoch_val = str(bu)
+                            readable = str(bu)
+
+                    writer.writerow([r['user_id'], epoch_val, readable])
+
             with open(path, "rb") as f:
                 bot.send_document(message.chat.id, f, caption="قائمة المحظورين (CSV)")
         finally:
@@ -353,6 +380,7 @@ def get_banned_handler(message):
     except Exception as e:
         logging.exception("get_banned file error: %s", e)
         bot.send_message(message.chat.id, "حدث خطأ أثناء جلب المحظورين.")
+
 
 @bot.message_handler(commands=['get_joined'])
 def get_joined_handler(message):
