@@ -6,6 +6,7 @@ import io
 import re
 import csv
 import logging
+from datetime import datetime, timedelta
 
 from flask import Flask, request
 import telebot
@@ -115,7 +116,7 @@ PLATFORMS = ["يوتيوب", "انستغرام", "تيك توك"]
 def is_banned(user_id):
     if int(user_id) == OWNER_ID:
         return 0
-    now = int(time.time())
+    now_ts = datetime.utcnow()
     conn = get_db_conn()
     try:
         with conn:
@@ -125,18 +126,19 @@ def is_banned(user_id):
                 if not row:
                     return 0
                 ban_until = row['ban_until']
-                if ban_until and now < int(ban_until):
-                    return int(ban_until) - now
+                if ban_until and now_ts < ban_until:
+                    return int((ban_until - now_ts).total_seconds())
                 else:
                     cur.execute("DELETE FROM bans WHERE user_id = %s", (int(user_id),))
                     return 0
     finally:
         put_db_conn(conn)
 
+
 def ban_user(user_id, duration=BAN_DURATION):
     if int(user_id) == OWNER_ID:
         return
-    ban_until = int(time.time()) + duration
+    ban_until_dt = datetime.utcnow() + timedelta(seconds=duration)  # تخزين وقت حقيقي
     conn = get_db_conn()
     try:
         with conn:
@@ -144,7 +146,7 @@ def ban_user(user_id, duration=BAN_DURATION):
                 cur.execute("""
                     INSERT INTO bans (user_id, ban_until) VALUES (%s, %s)
                     ON CONFLICT (user_id) DO UPDATE SET ban_until = EXCLUDED.ban_until
-                """, (int(user_id), ban_until))
+                """, (int(user_id), ban_until_dt))
     finally:
         put_db_conn(conn)
 
