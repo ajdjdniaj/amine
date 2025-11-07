@@ -1,9 +1,10 @@
-# bot.py (نسخة كاملة مع دعم Supabase/Postgres)
+# bot.py (نسخة كاملة مع Connection Pool و CSV exports)
 import os
 import time
 import tempfile
 import io
 import re
+import csv
 import logging
 
 from flask import Flask, request
@@ -16,6 +17,7 @@ import pytesseract
 
 import psycopg2
 from psycopg2.extras import RealDictCursor
+from psycopg2.pool import SimpleConnectionPool
 
 # ===== Logging =====
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -31,33 +33,45 @@ if not BOT_TOKEN:
 if not WEBHOOK_URL:
     raise RuntimeError("WEBHOOK_URL غير معرف في متغيرات البيئة")
 
-# OWNER_ID يجب أن يكون رقماً
 OWNER_ID = int(os.environ.get("OWNER_ID", "5883400070"))
+BAN_DURATION = 24 * 60 * 60  # 24 ساعة
 
-# مدة الحظر الافتراضية (24 ساعة)
-BAN_DURATION = 24 * 60 * 60
-
-# ===== إعداد قاعدة البيانات (Supabase / Postgres) =====
+# ===== إعداد قاعدة البيانات (Supabase / Postgres) مع Connection Pool =====
 DATABASE_URL = os.environ.get("DATABASE_URL")
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL غير معرف. ضع رابط الاتصال في متغير البيئة DATABASE_URL")
 
+# أنشئ pool عند بدء التطبيق
+DB_MIN_CONN = 1
+DB_MAX_CONN = 6  # عدّل إذا أردت
+try:
+    pool = SimpleConnectionPool(DB_MIN_CONN, DB_MAX_CONN, DATABASE_URL, cursor_factory=RealDictCursor, sslmode='require')
+    logging.info("Connection pool created.")
+except Exception as e:
+    logging.exception("Failed to create connection pool: %s", e)
+    raise
+
 def get_db_conn():
-    """
-    يعيد اتصالًا بقاعدة البيانات. نمرر sslmode='require' لأن Supabase يتطلب SSL.
-    """
+    """سحب اتصال من الـ pool"""
     try:
-        conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor, sslmode='require')
+        conn = pool.getconn()
         return conn
     except Exception as e:
-        logging.exception("فشل الاتصال بقاعدة البيانات: %s", e)
+        logging.exception("get_db_conn error: %s", e)
         raise
 
+def put_db_conn(conn):
+    """إعادة الاتصال إلى الـ pool"""
+    try:
+        pool.putconn(conn)
+    except Exception:
+        try:
+            conn.close()
+        except:
+            pass
+
 def init_db():
-    """
-    ينشئ الجداول الأساسية لو لم تكن موجودة.
-    tables: users, joined_users, bans
-    """
+    """إنشاء الجداول الأساسية إن لم تكن موجودة"""
     sql = """
     CREATE TABLE IF NOT EXISTS users (
       user_id BIGINT PRIMARY KEY,
@@ -79,9 +93,9 @@ def init_db():
                 cur.execute(sql)
         logging.info("DB initialized (tables ensured).")
     finally:
-        conn.close()
+        put_db_conn(conn)
 
-# نذكّر بتهيئة القاعدة عند بدء التشغيل
+# تهيئة الجداول مرة عند الإقلاع
 init_db()
 
 # ===== إعداد البوت و Flask =====
@@ -96,9 +110,8 @@ user_state = {}
 
 PLATFORMS = ["يوتيوب", "انستغرام", "تيك توك"]
 
-# ===== دوال قاعدة البيانات (استبدال ملفات النص) =====
+# ===== دوال قاعدة البيانات =====
 def is_banned(user_id):
-    """يعيد الوقت المتبقي من الحظر بالثواني أو 0 إن لم يكن محظوراً."""
     if int(user_id) == OWNER_ID:
         return 0
     now = int(time.time())
@@ -114,14 +127,12 @@ def is_banned(user_id):
                 if ban_until and now < int(ban_until):
                     return int(ban_until) - now
                 else:
-                    # إن انتهى الحظر نحذف السطر
                     cur.execute("DELETE FROM bans WHERE user_id = %s", (int(user_id),))
                     return 0
     finally:
-        conn.close()
+        put_db_conn(conn)
 
 def ban_user(user_id, duration=BAN_DURATION):
-    """يضيف/يحدّث حظر للمستخدم لمدة duration بالثواني."""
     if int(user_id) == OWNER_ID:
         return
     ban_until = int(time.time()) + duration
@@ -134,30 +145,27 @@ def ban_user(user_id, duration=BAN_DURATION):
                     ON CONFLICT (user_id) DO UPDATE SET ban_until = EXCLUDED.ban_until
                 """, (int(user_id), ban_until))
     finally:
-        conn.close()
+        put_db_conn(conn)
 
 def save_user(user_id):
-    """يسجّل ظهور المستخدم في جدول users."""
     conn = get_db_conn()
     try:
         with conn:
             with conn.cursor() as cur:
                 cur.execute("INSERT INTO users (user_id) VALUES (%s) ON CONFLICT DO NOTHING", (int(user_id),))
     finally:
-        conn.close()
+        put_db_conn(conn)
 
 def save_joined_user(user_id):
-    """يسجل أن المستخدم انضم للقناة (نفّذ الشرط)."""
     conn = get_db_conn()
     try:
         with conn:
             with conn.cursor() as cur:
                 cur.execute("INSERT INTO joined_users (user_id) VALUES (%s) ON CONFLICT DO NOTHING", (int(user_id),))
     finally:
-        conn.close()
+        put_db_conn(conn)
 
 def has_joined_before(user_id):
-    """يتحقق إن كان المستخدم قد نفذ الشرط من قبل."""
     conn = get_db_conn()
     try:
         with conn:
@@ -165,9 +173,9 @@ def has_joined_before(user_id):
                 cur.execute("SELECT 1 FROM joined_users WHERE user_id = %s", (int(user_id),))
                 return cur.fetchone() is not None
     finally:
-        conn.close()
+        put_db_conn(conn)
 
-# ===== واجهة النصوص والرسائل =====
+# ===== رسائل واجهة الاشتراك =====
 def send_welcome_with_channel(chat_id):
     markup = types.InlineKeyboardMarkup()
     markup.add(
@@ -225,7 +233,6 @@ def send_warning_join(chat_id):
 
 # ===== دالة مركزية للتحقق قبل العمليات =====
 def check_access(message_or_call):
-    # تدعم كل من message و CallbackQuery
     if isinstance(message_or_call, telebot.types.CallbackQuery):
         user_id = message_or_call.from_user.id
         chat_id = message_or_call.message.chat.id
@@ -246,21 +253,40 @@ def check_access(message_or_call):
         return False
     return True
 
-# ===== أوامر المالك (ملفات/قوائم) =====
+# ===== أوامر المالك مع إرسال ملفات CSV كمستندات =====
 @bot.message_handler(commands=['get_users'])
 def get_users_handler(message):
     if int(message.from_user.id) != OWNER_ID:
         return
     try:
         conn = get_db_conn()
+        rows = []
         with conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT user_id, first_seen FROM users ORDER BY first_seen DESC")
                 rows = cur.fetchall()
-        text = "قائمة المستخدمين (أحدث أول):\n" + "\n".join(str(r['user_id']) for r in rows) if rows else "لا يوجد مستخدمين بعد."
-        bot.send_message(message.chat.id, text)
+        put_db_conn(conn)
+
+        if not rows:
+            bot.send_message(message.chat.id, "لا يوجد مستخدمين بعد.")
+            return
+
+        fd, path = tempfile.mkstemp(suffix=".csv")
+        try:
+            with os.fdopen(fd, "w", newline='', encoding='utf-8') as csvfile:
+                writer = csv.writer(csvfile)
+                writer.writerow(["user_id", "first_seen"])
+                for r in rows:
+                    writer.writerow([r['user_id'], r['first_seen']])
+            with open(path, "rb") as f:
+                bot.send_document(message.chat.id, f, caption="قائمة معرفات المستخدمين (CSV)")
+        finally:
+            try:
+                os.remove(path)
+            except:
+                pass
     except Exception as e:
-        logging.exception("get_users error: %s", e)
+        logging.exception("get_users file error: %s", e)
         bot.send_message(message.chat.id, "حدث خطأ أثناء جلب المستخدمين.")
 
 @bot.message_handler(commands=['get_banned'])
@@ -269,14 +295,34 @@ def get_banned_handler(message):
         return
     try:
         conn = get_db_conn()
+        rows = []
         with conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT user_id, ban_until FROM bans ORDER BY ban_until DESC")
                 rows = cur.fetchall()
-        text = "قائمة المحظورين:\n" + "\n".join(f"{r['user_id']} until {r['ban_until']}" for r in rows) if rows else "لا يوجد محظورين."
-        bot.send_message(message.chat.id, text)
+        put_db_conn(conn)
+
+        if not rows:
+            bot.send_message(message.chat.id, "لا يوجد محظورين.")
+            return
+
+        fd, path = tempfile.mkstemp(suffix=".csv")
+        try:
+            with os.fdopen(fd, "w", newline='', encoding='utf-8') as csvfile:
+                writer = csv.writer(csvfile)
+                writer.writerow(["user_id", "ban_until_epoch", "ban_until_readable"])
+                for r in rows:
+                    readable = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(int(r['ban_until']))) if r['ban_until'] else ""
+                    writer.writerow([r['user_id'], r['ban_until'], readable])
+            with open(path, "rb") as f:
+                bot.send_document(message.chat.id, f, caption="قائمة المحظورين (CSV)")
+        finally:
+            try:
+                os.remove(path)
+            except:
+                pass
     except Exception as e:
-        logging.exception("get_banned error: %s", e)
+        logging.exception("get_banned file error: %s", e)
         bot.send_message(message.chat.id, "حدث خطأ أثناء جلب المحظورين.")
 
 @bot.message_handler(commands=['get_joined'])
@@ -285,14 +331,33 @@ def get_joined_handler(message):
         return
     try:
         conn = get_db_conn()
+        rows = []
         with conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT user_id, joined_at FROM joined_users ORDER BY joined_at DESC")
                 rows = cur.fetchall()
-        text = "من نفذوا الشرط:\n" + "\n".join(str(r['user_id']) for r in rows) if rows else "لا يوجد من نفذ الشرط بعد."
-        bot.send_message(message.chat.id, text)
+        put_db_conn(conn)
+
+        if not rows:
+            bot.send_message(message.chat.id, "لا يوجد من نفذ الشرط بعد.")
+            return
+
+        fd, path = tempfile.mkstemp(suffix=".csv")
+        try:
+            with os.fdopen(fd, "w", newline='', encoding='utf-8') as csvfile:
+                writer = csv.writer(csvfile)
+                writer.writerow(["user_id", "joined_at"])
+                for r in rows:
+                    writer.writerow([r['user_id'], r['joined_at']])
+            with open(path, "rb") as f:
+                bot.send_document(message.chat.id, f, caption="قائمة من نفّذوا الشرط (CSV)")
+        finally:
+            try:
+                os.remove(path)
+            except:
+                pass
     except Exception as e:
-        logging.exception("get_joined error: %s", e)
+        logging.exception("get_joined file error: %s", e)
         bot.send_message(message.chat.id, "حدث خطأ أثناء جلب القائمة.")
 
 @bot.message_handler(commands=['ban_user'])
@@ -305,7 +370,7 @@ def ban_user_command(message):
             bot.reply_to(message, "استخدم الأمر بهذا الشكل:\n/ban_user user_id")
             return
         user_id = parts[1]
-        ban_user(user_id, duration=100*365*24*60*60)  # حظر طويل الأمد
+        ban_user(user_id, duration=100*365*24*60*60)
         bot.reply_to(message, f"تم حظر المستخدم {user_id} نهائيًا.")
     except Exception as e:
         logging.exception("ban_user_command error: %s", e)
@@ -328,12 +393,12 @@ def unban_user_command(message):
                     cur.execute("DELETE FROM bans WHERE user_id = %s", (int(user_id),))
             bot.reply_to(message, f"تم إلغاء الحظر عن المستخدم {user_id}.")
         finally:
-            conn.close()
+            put_db_conn(conn)
     except Exception as e:
         logging.exception("unban_user_command error: %s", e)
         bot.reply_to(message, "حدث خطأ أثناء إلغاء الحظر.")
 
-# ===== الواجهة و الأدوات (تحميل و WiFi) =====
+# ===== بقية واجهة البوت (تحميل + WiFi) - نفس المنطق السابق مع بعض التحسينات =====
 def show_main_menu(chat_id, msg_only=False):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add("🎬 أداة تحميل mp3/mp4", "📡 أداة اختراق WiFi fh")
@@ -374,7 +439,6 @@ def check_join_callback(call):
         save_joined_user(user_id)
         markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
         markup.add("🎬 أداة تحميل mp3/mp4", "📡 أداة اختراق WiFi fh")
-        # نستخدم edit_message_text كي لا نكرّر الرسالة الأصلية
         try:
             bot.edit_message_text("✅ تم التحقق من اشتراكك في القناة!\n\nاختر الخدمة التي تريد استخدامها:", call.message.chat.id, call.message.message_id, reply_markup=markup)
         except Exception:
@@ -406,7 +470,6 @@ def recheck_callback(call):
         ban_user(user_id)
         send_ban_with_check(call.message.chat.id, BAN_DURATION)
 
-# ===== أداة التحميل مع ملفات مؤقتة =====
 @bot.message_handler(func=lambda m: m.text == "🎬 أداة تحميل mp3/mp4")
 def choose_downloader(message):
     if not check_access(message):
@@ -531,14 +594,13 @@ def process_download(call):
             else:
                 filename = ydl.prepare_filename(info).rsplit('.', 1)[0] + ".mp3"
 
-        # تحقق من وجود الملف وحجمه (حد افتراضي لتليجرام ~45MB هنا)
         if not os.path.exists(filename):
             try:
                 bot.edit_message_text("❌ فشل التحميل أو الملف غير موجود.", call.message.chat.id, msg.message_id)
             except:
                 pass
         else:
-            max_bytes = 45 * 1024 * 1024  # 45 MB cushion
+            max_bytes = 45 * 1024 * 1024
             size = os.path.getsize(filename)
             if size > max_bytes:
                 try:
@@ -562,7 +624,6 @@ def process_download(call):
         except:
             pass
     finally:
-        # تنظيف الملفات المؤقتة
         try:
             for root, dirs, files in os.walk(tmpdir):
                 for name in files:
@@ -582,20 +643,7 @@ def process_download(call):
     bot.send_message(call.message.chat.id, "💡 ماذا تريد أن تفعل الآن؟", reply_markup=markup)
     user_state[call.message.chat.id] = "waiting_link"
 
-@bot.message_handler(func=lambda m: m.text in ["منصة أخرى", "نفس المنصة"])
-def next_action(message):
-    if not check_access(message):
-        return
-    if message.text == "منصة أخرى":
-        send_platforms(message.chat.id)
-    elif message.text == "نفس المنصة":
-        platform = user_platform.get(message.from_user.id, "المنصة")
-        markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
-        markup.add("🔙 رجوع")
-        bot.send_message(message.chat.id, f"📥 أرسل رابط الفيديو من {platform}:", reply_markup=markup)
-        user_state[message.chat.id] = "waiting_link"
-
-# ===== WiFi tool (المنطق نفسه مع تحسينات طفيفة) =====
+# ===== WiFi tool (كما قبل) =====
 def show_wifi_methods(chat_id):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add("✍️ كتابة اسم الراوتر", "🖼️ صورة لجميع الراوترات", "🔙 رجوع")
@@ -680,7 +728,6 @@ def process_wifi_image(message):
         logging.exception("image download error: %s", e)
         return
 
-    # تصغير الصورة إن كانت كبيرة
     max_width = 800
     if image.width > max_width:
         ratio = max_width / image.width
@@ -691,7 +738,7 @@ def process_wifi_image(message):
         texts = []
         try:
             texts.append(pytesseract.image_to_string(image_obj, lang='eng'))
-        except Exception as e:
+        except Exception:
             texts.append("")
         try:
             img2 = image_obj.convert('L').point(lambda x: 0 if x < 140 else 255, '1')
@@ -793,7 +840,7 @@ def fallback_handler(message):
         return
     show_main_menu(message.chat.id, msg_only=False)
 
-# ===== Webhook Flask endpoint =====
+# ===== Webhook endpoints =====
 @app.route('/webhook', methods=['POST'])
 def webhook():
     if request.headers.get('content-type') == 'application/json':
