@@ -845,9 +845,35 @@ def fallback_handler(message):
 def webhook():
     if request.headers.get('content-type') == 'application/json':
         json_string = request.get_data().decode('utf-8')
-        update = telebot.types.Update.de_json(json_string)
-        bot.process_new_updates([update])
-        return '', 200
+        # سجّل بداية التحديث (مقتطف حتى 1000 حرف لتفادي زيادة اللوق)
+        try:
+            logging.info("Received update (start): %s", json_string[:1000])
+        except Exception:
+            pass
+
+        try:
+            update = telebot.types.Update.de_json(json_string)
+            # سجّل نوع التحديث الأساسي (رسالة أو callback)
+            try:
+                if update.message:
+                    logging.info("Update => message from=%s chat_id=%s text=%s",
+                                 update.message.from_user.id,
+                                 update.message.chat.id,
+                                 getattr(update.message, 'text', None))
+                elif update.callback_query:
+                    logging.info("Update => callback from=%s data=%s",
+                                 update.callback_query.from_user.id,
+                                 update.callback_query.data)
+                else:
+                    logging.info("Update => other type: %s", dir(update))
+            except Exception:
+                pass
+
+            bot.process_new_updates([update])
+            return '', 200
+        except Exception as e:
+            logging.exception("Failed to process update:")
+            return '', 500
     else:
         return '', 403
 
