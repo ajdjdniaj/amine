@@ -36,7 +36,7 @@ if not WEBHOOK_URL:
     raise RuntimeError("WEBHOOK_URL غير معرف في متغيرات البيئة")
 
 OWNER_ID = int(os.environ.get("OWNER_ID", "5883400070"))
-BAN_DURATION = 24 * 60 * 60  # 24 ساعة
+BAN_DURATION = 5 * 60  # 5 دقائق
 
 # ===== إعداد قاعدة البيانات (Supabase / Postgres) مع Connection Pool =====
 DATABASE_URL = os.environ.get("DATABASE_URL")
@@ -216,9 +216,7 @@ def send_welcome_with_channel(chat_id):
         f"""👋 أهلاً بك في البوت الشامل!
 
 🔒 لاستخدام البوت يجب عليك أولاً الانضمام إلى القناة الرسمية:
-https://t.me/{CHANNEL_USERNAME}
-
-⚠️ *تنبيه مهم*: إذا لم تنضم للقناة وحاولت استخدام البوت، لن تستطيع استخدام البوت حتى تنضم. إذا دخلت القناة ثم خرجت منها لاحقًا سيتم حظرك لمدة 24 ساعة.
+⚠️ *تنبيه مهم*: إذا لم تنضم للقناة وحاولت استخدام البوت، لن تستطيع استخدام البوت حتى تنضم. إذا دخلت القناة ثم خرجت منها لاحقًا "سيتم حظرك لمدة 5 دقائق.".
 
 بعد الانضمام للقناة اضغط على زر ✅ تحقق بالأسفل للمتابعة.""",
         reply_markup=markup,
@@ -235,7 +233,7 @@ def send_ban_with_check(chat_id, ban_left):
     )
     bot.send_message(
         chat_id,
-        f"❌ تم حظرك من استخدام البوت لمدة 24 ساعة بسبب خروجك من القناة بعد تنفيذ الشرط.\n"
+        f"❌ تم حظرك من استخدام البوت لمدة 5 دقائق بسبب خروجك من القناة بعد تنفيذ الشرط.\n"
         f"الوقت المتبقي: {hours} ساعة و {minutes} دقيقة.\n\n"
         f"انضم للقناة ثم اضغط تحقق من جديد بعد انتهاء الحظر.\n"
         f"رابط القناة: https://t.me/{CHANNEL_USERNAME}",
@@ -380,6 +378,41 @@ def get_banned_handler(message):
     except Exception as e:
         logging.exception("get_banned file error: %s", e)
         bot.send_message(message.chat.id, "حدث خطأ أثناء جلب المحظورين.")
+
+@bot.message_handler(commands=['stats'])
+def stats_handler(message):
+    if int(message.from_user.id) != OWNER_ID:
+        return
+    try:
+        conn = get_db_conn()
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) AS c FROM users")
+                total_users = cur.fetchone()['c']
+
+                cur.execute("SELECT COUNT(*) AS c FROM joined_users")
+                total_joined = cur.fetchone()['c']
+
+                # المحظورون النشطون الآن (ban_until أكبر من الوقت الحالي)
+                cur.execute("SELECT COUNT(*) AS c FROM bans WHERE ban_until > now()")
+                active_bans = cur.fetchone()['c']
+
+                # مستخدمون جدد اليوم (اختياري لكنه مفيد)
+                cur.execute("SELECT COUNT(*) AS c FROM users WHERE first_seen >= now() - interval '1 day'")
+                new_today = cur.fetchone()['c']
+        put_db_conn(conn)
+
+        bot.send_message(
+            message.chat.id,
+            "📊 إحصائيات البوت:\n"
+            f"👥 إجمالي المستخدمين: {total_users}\n"
+            f"✅ نفّذوا شرط القناة: {total_joined}\n"
+            f"⛔ محظورون حاليًا: {active_bans}\n"
+            f"🆕 مستخدمون جدد اليوم: {new_today}"
+        )
+    except Exception as e:
+        logging.exception("stats_handler error: %s", e)
+        bot.send_message(message.chat.id, "حدث خطأ أثناء جلب الإحصائيات.")
 
 
 @bot.message_handler(commands=['get_joined'])
