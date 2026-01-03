@@ -1,4 +1,4 @@
-# bot.py (النسخة الاحترافية الكاملة - تنظيف تلقائي + واي فاي محسن)
+# bot.py (نسخة Inline Buttons - واجهة نظيفة واحترافية)
 import os
 import time
 import tempfile
@@ -36,14 +36,13 @@ if not WEBHOOK_URL:
     raise RuntimeError("WEBHOOK_URL غير معرف")
 
 OWNER_ID = int(os.environ.get("OWNER_ID", "5883400070"))
-BAN_DURATION = 5 * 60  # 5 دقائق
+BAN_DURATION = 5 * 60
 
 # ===== إعداد قاعدة البيانات =====
 DATABASE_URL = os.environ.get("DATABASE_URL")
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL غير معرف")
 
-# أنشئ pool عند بدء التطبيق
 DB_MIN_CONN = 1
 DB_MAX_CONN = 6 
 try:
@@ -55,8 +54,7 @@ except Exception as e:
 
 def get_db_conn():
     try:
-        conn = pool.getconn()
-        return conn
+        return pool.getconn()
     except Exception as e:
         logging.exception("get_db_conn error: %s", e)
         raise
@@ -103,33 +101,31 @@ app = Flask(__name__)
 # ===== الذاكرة المؤقتة =====
 user_links = {}
 user_platform = {}
-user_video_info = {}
 user_state = {}
+# لتخزين آخر رسالة قائمة (لحذفها أو تعديلها)
+user_last_menu_id = {}
 
-# [نظام التتبع الجديد للحذف]
-# لتخزين معرف آخر رسالة بوت (القائمة الكبيرة) لكل مستخدم
-user_last_bot_message = {} 
+PLATFORMS_MAP = {
+    "youtube": "يوتيوب",
+    "instagram": "انستغرام",
+    "tiktok": "تيك توك"
+}
 
-PLATFORMS = ["يوتيوب", "انستغرام", "تيك توك"]
-
-# ===== دوال مساعدة للتنظيف (Cleanup) =====
-def delete_last_bot_msg(chat_id):
-    """حذف آخر رسالة محفوظة للبوت (القوائم الكبيرة)"""
-    msg_id = user_last_bot_message.get(chat_id)
+# ===== دوال مساعدة للتنظيف =====
+def delete_last_menu(chat_id):
+    """حذف رسالة القائمة السابقة إذا وجدت"""
+    msg_id = user_last_menu_id.get(chat_id)
     if msg_id:
         try:
             bot.delete_message(chat_id, msg_id)
-        except Exception:
-            pass # قد تكون محذوفة بالفعل
-        user_last_bot_message.pop(chat_id, None)
+        except:
+            pass
+        user_last_menu_id.pop(chat_id, None)
 
-def send_and_track(chat_id, text, reply_markup=None, parse_mode=None):
-    """إرسال رسالة وحفظ معرفها ليتم حذفها لاحقاً"""
-    sent = bot.send_message(chat_id, text, reply_markup=reply_markup, parse_mode=parse_mode)
-    user_last_bot_message[chat_id] = sent.message_id
-    return sent
+def save_menu_id(chat_id, msg_id):
+    user_last_menu_id[chat_id] = msg_id
 
-# ===== دوال قاعدة البيانات (الحظر والتحقق) =====
+# ===== دوال DB (User/Ban/Join) =====
 def is_banned(user_id):
     if int(user_id) == OWNER_ID:
         return 0
@@ -140,8 +136,7 @@ def is_banned(user_id):
             with conn.cursor() as cur:
                 cur.execute("SELECT ban_until FROM bans WHERE user_id = %s", (int(user_id),))
                 row = cur.fetchone()
-                if not row:
-                    return 0
+                if not row: return 0
                 ban_until = row['ban_until']
                 if ban_until and now_ts < ban_until:
                     return int((ban_until - now_ts).total_seconds())
@@ -152,8 +147,7 @@ def is_banned(user_id):
         put_db_conn(conn)
 
 def ban_user(user_id, duration=BAN_DURATION):
-    if int(user_id) == OWNER_ID:
-        return
+    if int(user_id) == OWNER_ID: return
     ban_until_dt = datetime.utcnow() + timedelta(seconds=duration)
     conn = get_db_conn()
     try:
@@ -196,58 +190,13 @@ def has_joined_before(user_id):
 
 def is_user_joined(user_id):
     try:
-        if int(user_id) == OWNER_ID:
-            return True
+        if int(user_id) == OWNER_ID: return True
         member = bot.get_chat_member(f"@{CHANNEL_USERNAME}", int(user_id))
-        status = getattr(member, "status", None)
-        return status in ('member', 'creator', 'administrator')
-    except telebot.apihelper.ApiException as e:
-        logging.exception("ApiException in is_user_joined: %s", e)
-        return False
-    except Exception as e:
-        logging.exception("Unexpected error in is_user_joined: %s", e)
+        return getattr(member, "status", "") in ('member', 'creator', 'administrator')
+    except:
         return False
 
-# ===== رسائل التحقق =====
-def send_welcome_with_channel(chat_id):
-    markup = types.InlineKeyboardMarkup()
-    markup.add(
-        types.InlineKeyboardButton("📢 انضم للقناة", url=f"https://t.me/{CHANNEL_USERNAME}"),
-        types.InlineKeyboardButton("✅ تحقق", callback_data="check_join")
-    )
-    bot.send_message(
-        chat_id,
-        f""" welcome
-
-🔒 لاستخدام البوت يجب عليك أولاً الانضمام إلى القناة الرسمية:
-⚠️ *تنبيه مهم*:  لن تستطيع استخدام البوت حتى تنضم للقناة.
-
-بعد الانضمام للقناة اضغط على زر ✅ تحقق بالأسفل للمتابعة.""",
-        reply_markup=markup,
-        parse_mode="Markdown"
-    )
-
-def send_ban_with_check(chat_id, ban_left):
-    minutes = (ban_left % 3600) // 60
-    markup = types.InlineKeyboardMarkup()
-    markup.add(
-        types.InlineKeyboardButton("📢 انضم للقناة", url=f"https://t.me/{CHANNEL_USERNAME}"),
-        types.InlineKeyboardButton("✅ تحقق من جديد", callback_data="recheck")
-    )
-    bot.send_message(
-        chat_id,
-        f"❌ تم حظرك لمدة 5 دقائق.\nالوقت المتبقي: {minutes} دقيقة.\nانضم ثم تحقق.",
-        reply_markup=markup
-    )
-
-def send_warning_join(chat_id):
-    markup = types.InlineKeyboardMarkup()
-    markup.add(
-        types.InlineKeyboardButton("📢 انضم للقناة", url=f"https://t.me/{CHANNEL_USERNAME}"),
-        types.InlineKeyboardButton("✅ تحقق", callback_data="check_join")
-    )
-    bot.send_message(chat_id, "⚠️ يجب الانضمام للقناة أولاً.", reply_markup=markup)
-
+# ===== التحقق والترحيب =====
 def check_access(message_or_call):
     if isinstance(message_or_call, telebot.types.CallbackQuery):
         user_id = message_or_call.from_user.id
@@ -258,396 +207,348 @@ def check_access(message_or_call):
 
     ban_left = is_banned(user_id)
     if ban_left > 0:
-        send_ban_with_check(chat_id, ban_left)
+        mins = (ban_left % 3600) // 60
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("📢 انضم للقناة", url=f"https://t.me/{CHANNEL_USERNAME}"))
+        markup.add(types.InlineKeyboardButton("✅ تحقق من جديد", callback_data="recheck_ban"))
+        
+        # إذا كان نداء callback نعدل الرسالة، وإلا نرسل جديدة
+        text = f"❌ تم حظرك لمدة 5 دقائق.\nالمتبقي: {mins} دقيقة."
+        if isinstance(message_or_call, telebot.types.CallbackQuery):
+            try: bot.edit_message_text(text, chat_id, message_or_call.message.message_id, reply_markup=markup)
+            except: pass
+        else:
+            bot.send_message(chat_id, text, reply_markup=markup)
         return False
+
     if not is_user_joined(user_id):
         if has_joined_before(user_id):
             ban_user(user_id)
-            send_ban_with_check(chat_id, BAN_DURATION)
+            # استدعاء دالة Ban هنا أو إعادة استدعاء check_access ليعرض الحظر
+            return check_access(message_or_call)
         else:
-            send_warning_join(chat_id)
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("📢 انضم للقناة", url=f"https://t.me/{CHANNEL_USERNAME}"))
+            markup.add(types.InlineKeyboardButton("✅ تحقق", callback_data="check_join"))
+            text = "🔒 يجب الانضمام للقناة أولاً لاستخدام البوت."
+            if isinstance(message_or_call, telebot.types.CallbackQuery):
+                try: bot.edit_message_text(text, chat_id, message_or_call.message.message_id, reply_markup=markup)
+                except: pass
+            else:
+                sent = bot.send_message(chat_id, text, reply_markup=markup)
+                save_menu_id(chat_id, sent.message_id)
         return False
     return True
 
-# ===== أوامر المالك (Admin) =====
-@bot.message_handler(commands=['get_users'])
-def get_users_handler(message):
-    if int(message.from_user.id) != OWNER_ID: return
-    try:
-        conn = get_db_conn()
-        with conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT user_id, first_seen FROM users ORDER BY first_seen DESC")
-                rows = cur.fetchall()
-        put_db_conn(conn)
-        if not rows:
-            bot.send_message(message.chat.id, "لا يوجد مستخدمين.")
+# ===== القوائم (Inline Menus) =====
+
+def send_main_menu(chat_id, edit_msg_id=None):
+    """إرسال القائمة الرئيسية (أزرار شفافة)"""
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    btn1 = types.InlineKeyboardButton("🎬 أداة تحميل mp3/mp4", callback_data="menu_download")
+    btn2 = types.InlineKeyboardButton("📡 أداة اختراق WiFi fh", callback_data="menu_wifi")
+    markup.add(btn1, btn2)
+    
+    text = "👋 أهلاً بك!\n✨ اختر الخدمة:"
+    
+    if edit_msg_id:
+        try:
+            bot.edit_message_text(text, chat_id, edit_msg_id, reply_markup=markup)
+            save_menu_id(chat_id, edit_msg_id)
             return
-        fd, path = tempfile.mkstemp(suffix=".csv")
-        with os.fdopen(fd, "w", newline='', encoding='utf-8') as csvfile:
-            writer = csv.writer(csvfile)
-            writer.writerow(["user_id", "first_seen"])
-            for r in rows: writer.writerow([r['user_id'], r['first_seen']])
-        with open(path, "rb") as f:
-            bot.send_document(message.chat.id, f, caption="Users CSV")
-        os.remove(path)
-    except Exception as e:
-        bot.send_message(message.chat.id, "Error fetching users.")
+        except:
+            pass # فشل التعديل، نرسل جديد
+            
+    # إرسال رسالة جديدة إذا لم نعدل
+    sent = bot.send_message(chat_id, text, reply_markup=markup)
+    save_menu_id(chat_id, sent.message_id)
 
-@bot.message_handler(commands=['get_banned'])
-def get_banned_handler(message):
-    if int(message.from_user.id) != OWNER_ID: return
-    try:
-        conn = get_db_conn()
-        with conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT user_id, ban_until FROM bans ORDER BY ban_until DESC")
-                rows = cur.fetchall()
-        put_db_conn(conn)
-        if not rows:
-            bot.send_message(message.chat.id, "لا يوجد محظورين.")
+def send_download_menu(chat_id, edit_msg_id=None):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    btn_yt = types.InlineKeyboardButton("يوتيوب", callback_data="platform_youtube")
+    btn_ig = types.InlineKeyboardButton("انستغرام", callback_data="platform_instagram")
+    btn_tk = types.InlineKeyboardButton("تيك توك", callback_data="platform_tiktok")
+    btn_back = types.InlineKeyboardButton("🔙 رجوع", callback_data="back_to_main")
+    
+    markup.add(btn_yt, btn_ig)
+    markup.add(btn_tk)
+    markup.add(btn_back)
+    
+    text = "✨ اختر المنصة للتحميل:\n(mp4/mp3)"
+    
+    if edit_msg_id:
+        try:
+            bot.edit_message_text(text, chat_id, edit_msg_id, reply_markup=markup)
             return
-        fd, path = tempfile.mkstemp(suffix=".csv")
-        with os.fdopen(fd, "w", newline='', encoding='utf-8') as csvfile:
-            writer = csv.writer(csvfile)
-            writer.writerow(["user_id", "ban_until"])
-            for r in rows: writer.writerow([r['user_id'], r['ban_until']])
-        with open(path, "rb") as f:
-            bot.send_document(message.chat.id, f, caption="Banned CSV")
-        os.remove(path)
-    except:
-        pass
-
-@bot.message_handler(commands=['stats'])
-def stats_handler(message):
-    if int(message.from_user.id) != OWNER_ID: return
-    try:
-        conn = get_db_conn()
-        with conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT COUNT(*) AS c FROM users")
-                u = cur.fetchone()['c']
-                cur.execute("SELECT COUNT(*) AS c FROM joined_users")
-                j = cur.fetchone()['c']
-                cur.execute("SELECT COUNT(*) AS c FROM bans WHERE ban_until > now()")
-                b = cur.fetchone()['c']
-        put_db_conn(conn)
-        bot.send_message(message.chat.id, f"📊 Stats:\nUsers: {u}\nJoined: {j}\nBanned: {b}")
-    except: pass
-
-@bot.message_handler(commands=['ban_user'])
-def ban_user_command(message):
-    if int(message.from_user.id) != OWNER_ID: return
-    try:
-        parts = message.text.split()
-        if len(parts) == 2:
-            ban_user(parts[1], 3153600000)
-            bot.reply_to(message, "تم الحظر.")
-    except: pass
-
-@bot.message_handler(commands=['unban_user'])
-def unban_user_command(message):
-    if int(message.from_user.id) != OWNER_ID: return
-    try:
-        parts = message.text.split()
-        if len(parts) == 2:
-            conn = get_db_conn()
-            with conn:
-                with conn.cursor() as cur:
-                    cur.execute("DELETE FROM bans WHERE user_id=%s", (int(parts[1]),))
-            put_db_conn(conn)
-            bot.reply_to(message, "تم إلغاء الحظر.")
-    except: pass
-
-# ===== منطق واجهة البوت والتحكم في الرسائل (Message Flow) =====
-
-def show_main_menu(chat_id, msg_only=False):
-    # [تنظيف] حذف القوائم القديمة
-    delete_last_bot_msg(chat_id)
-
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add("🎬 أداة تحميل mp3/mp4", "📡 أداة اختراق WiFi fh")
+        except: pass
     
-    text = "👋 أهلاً بك في البوت الشامل!\n✨ اختر الخدمة:"
-    if msg_only: text = "👇 اختر الأداة:"
-    
-    # [تتبع] هذه ليست قائمة كبيرة جداً لكن يمكن تتبعها لحذفها عند الدخول لخدمة
-    send_and_track(chat_id, text, reply_markup=markup)
-    user_state[chat_id] = "main_menu"
+    sent = bot.send_message(chat_id, text, reply_markup=markup)
+    save_menu_id(chat_id, sent.message_id)
 
-def send_platforms(chat_id):
-    # [تنظيف]
-    delete_last_bot_msg(chat_id)
-
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
-    for p in PLATFORMS:
-        markup.add(p)
-    markup.add("🔙 رجوع")
+def send_wifi_menu(chat_id, edit_msg_id=None):
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    btn_manual = types.InlineKeyboardButton("✍️ كتابة اسم الراوتر", callback_data="wifi_manual")
+    btn_photo = types.InlineKeyboardButton("🖼️ صورة لجميع الراوترات", callback_data="wifi_photo")
+    btn_back = types.InlineKeyboardButton("🔙 رجوع", callback_data="back_to_main")
+    markup.add(btn_manual, btn_photo, btn_back)
     
-    # [تتبع]
-    send_and_track(chat_id, "يرجى اختيار منصة:", reply_markup=markup)
-    user_state[chat_id] = "platforms"
+    text = "📡 اختر الطريقة:"
+    
+    if edit_msg_id:
+        try:
+            bot.edit_message_text(text, chat_id, edit_msg_id, reply_markup=markup)
+            return
+        except: pass
+    
+    sent = bot.send_message(chat_id, text, reply_markup=markup)
+    save_menu_id(chat_id, sent.message_id)
+
+# ===== Handlers (الأوامر والـ Callbacks) =====
 
 @bot.message_handler(commands=['start'])
 def start_handler(message):
     user_id = message.from_user.id
     save_user(user_id)
+    # حذف أي قائمة سابقة لتنظيف الشات
+    delete_last_menu(message.chat.id)
+    
     if check_access(message):
-        send_welcome_with_channel(message.chat.id)
+        send_main_menu(message.chat.id)
 
-@bot.callback_query_handler(func=lambda call: call.data == "check_join")
-def check_join_callback(call):
+# معالج الأزرار الشفافة (قلب البوت الجديد)
+@bot.callback_query_handler(func=lambda call: True)
+def handle_callbacks(call):
     chat_id = call.message.chat.id
-    if is_user_joined(call.from_user.id):
-        save_joined_user(call.from_user.id)
-        # حذف رسالة التحقق
-        try: bot.delete_message(chat_id, call.message.message_id)
+    user_id = call.from_user.id
+    
+    # 1. التحقق العام
+    if call.data == "check_join":
+        if is_user_joined(user_id):
+            save_joined_user(user_id)
+            bot.answer_callback_query(call.id, "✅ تم التحقق!")
+            send_main_menu(chat_id, edit_msg_id=call.message.message_id)
+        else:
+            bot.answer_callback_query(call.id, "⚠️ لم تنضم بعد!", show_alert=True)
+        return
+
+    if call.data == "recheck_ban":
+        if check_access(call): # سيعيد التحقق من الوقت
+            bot.answer_callback_query(call.id, "✅ انتهى الحظر.")
+            send_main_menu(chat_id, edit_msg_id=call.message.message_id)
+        else:
+            bot.answer_callback_query(call.id, "❌ ما زلت محظوراً.")
+        return
+
+    # التحقق من الصلاحية لباقي الأزرار
+    if not check_access(call):
+        return
+
+    # 2. التنقل في القوائم
+    if call.data == "back_to_main":
+        user_state[chat_id] = "main_menu" # Reset state
+        send_main_menu(chat_id, edit_msg_id=call.message.message_id)
+    
+    elif call.data == "menu_download":
+        send_download_menu(chat_id, edit_msg_id=call.message.message_id)
+        user_state[chat_id] = "menu_download"
+        
+    elif call.data == "menu_wifi":
+        send_wifi_menu(chat_id, edit_msg_id=call.message.message_id)
+        user_state[chat_id] = "menu_wifi"
+
+    # 3. خيارات التحميل
+    elif call.data.startswith("platform_"):
+        platform_key = call.data.split("_")[1]
+        platform_name = PLATFORMS_MAP.get(platform_key, platform_key)
+        
+        if platform_key in ["youtube", "instagram"]:
+            bot.answer_callback_query(call.id, "⚠️ صيانة مؤقتة", show_alert=True)
+            return
+            
+        user_platform[user_id] = platform_name
+        user_state[chat_id] = "waiting_link"
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="menu_download"))
+        
+        text = f"📥 أرسل رابط الفيديو من {platform_name}:"
+        try:
+            bot.edit_message_text(text, chat_id, call.message.message_id, reply_markup=markup)
+        except: pass
+
+    # 4. خيارات WiFi
+    elif call.data == "wifi_manual":
+        user_state[chat_id] = "waiting_ssid"
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="menu_wifi"))
+        try:
+            bot.edit_message_text("🔍 أرسل اسم الشبكة (يجب أن تبدأ بـ fh_):", chat_id, call.message.message_id, reply_markup=markup)
         except: pass
         
-        show_main_menu(chat_id)
-    else:
-        try: bot.answer_callback_query(call.id, "⚠️ لم تنضم بعد!")
+    elif call.data == "wifi_photo":
+        user_state[chat_id] = "waiting_wifi_photo"
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="menu_wifi"))
+        try:
+            bot.edit_message_text("📸 أرسل صورة لقائمة الشبكات:", chat_id, call.message.message_id, reply_markup=markup)
         except: pass
 
-@bot.callback_query_handler(func=lambda call: call.data == "recheck")
-def recheck_callback(call):
-    chat_id = call.message.chat.id
-    if is_user_joined(call.from_user.id):
-        save_joined_user(call.from_user.id)
-        try: bot.delete_message(chat_id, call.message.message_id)
-        except: pass
-        show_main_menu(chat_id)
-    else:
-        ban_user(call.from_user.id)
-        send_ban_with_check(chat_id, BAN_DURATION)
-
-# --- قسم التحميل ---
-@bot.message_handler(func=lambda m: m.text == "🎬 أداة تحميل mp3/mp4")
-def choose_downloader(message):
-    if not check_access(message): return
-    
-    # [تنظيف] حذف القائمة الرئيسية القديمة
-    delete_last_bot_msg(message.chat.id)
-
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
-    for p in PLATFORMS:
-        markup.add(p)
-    markup.add("🔙 رجوع")
-    
-    # رسالة القائمة الكبيرة
-    msg = (
-        "✨ اختر المنصة التي تريد التحميل منها:\n"
-        "0️⃣ يوتيوب: تحميل فيديوهات يوتيوب (mp4 أو mp3).\n"
-        "1️⃣ انستغرام: تحميل فيديوهات أو ريلز انستغرام (mp4 أو mp3).\n"
-        "2️⃣ تيك توك: تحميل فيديوهات تيك توك بدون علامة مائية (mp4 أو mp3)."
-    )
-    # [تتبع] نحفظ هذه الرسالة لحذفها بمجرد أن يختار المستخدم منصة
-    send_and_track(message.chat.id, msg, reply_markup=markup)
-    user_state[message.chat.id] = "platforms"
-
-@bot.message_handler(func=lambda m: m.text in PLATFORMS)
-def ask_for_link(message):
-    if not check_access(message): return
-    
-    # [تنظيف هام] هنا يتم حذف القائمة الكبيرة (يوتيوب، تيك توك...)
-    delete_last_bot_msg(message.chat.id)
-
-    if message.text in ["يوتيوب", "انستغرام"]:
-        # رسالة صيانة نظيفة
-        markup = types.ReplyKeyboardMarkup(resize_keyboard=True).add("🔙 رجوع")
-        send_and_track(message.chat.id, "⚠️ هذه الخدمة في صيانة حاليًا. اختر منصة أخرى.", reply_markup=markup)
-        user_state[message.chat.id] = "platforms" # نبقيه في نفس الحالة ليعود
-        return
-
-    user_platform[message.from_user.id] = message.text
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
-    markup.add("🔙 رجوع")
-    
-    send_and_track(message.chat.id, f"📥 أرسل رابط الفيديو من {message.text}:", reply_markup=markup)
-    user_state[message.chat.id] = "waiting_link"
-
-@bot.message_handler(func=lambda m: m.text == "🔙 رجوع")
-def back_handler(message):
-    if not check_access(message): return
-    
-    # [تنظيف] حذف الرسالة الحالية
-    delete_last_bot_msg(message.chat.id)
-
-    state = user_state.get(message.chat.id, "main_menu")
-    if state == "waiting_link":
-        # العودة لاختيار المنصة (عرض القائمة الكبيرة مجدداً)
-        choose_downloader(message)
-    elif state == "platforms":
-        show_main_menu(message.chat.id)
-    elif state in ["wifi_methods", "wifi_name_or_image"]:
-        show_main_menu(message.chat.id)
-    else:
-        show_main_menu(message.chat.id)
-
-@bot.message_handler(func=lambda m: m.text and m.text.startswith("http"))
-def handle_link(message):
-    if not check_access(message): return
-    
-    # التحقق من أن المستخدم في وضع انتظار الرابط
-    if user_state.get(message.chat.id) != "waiting_link":
-        delete_last_bot_msg(message.chat.id)
-        send_platforms(message.chat.id)
-        return
-
-    # [تنظيف] حذف رسالة "أرسل الرابط"
-    delete_last_bot_msg(message.chat.id)
-
-    platform = user_platform.get(message.from_user.id)
-    url = message.text.strip()
-    
-    # تحقق بسيط من الرابط
-    valid = False
-    if platform == "تيك توك" and ("tiktok" in url or "تيك توك" in url): valid = True
-    # (يمكن إضافة باقي المنصات)
-
-    if platform == "تيك توك" and not valid:
-        markup = types.ReplyKeyboardMarkup(resize_keyboard=True).add("🔙 رجوع")
-        send_and_track(message.chat.id, "❌ الرابط لا يبدو صحيحاً لتيك توك.", reply_markup=markup)
-        return
-
-    user_links[message.from_user.id] = url
-    
-    wait_msg = bot.send_message(message.chat.id, "🎬 جاري جلب المعلومات...")
-    
-    markup = types.InlineKeyboardMarkup()
-    markup.add(
-        types.InlineKeyboardButton("🎬 فيديو (mp4)", callback_data="video"),
-        types.InlineKeyboardButton("🎵 صوت (mp3)", callback_data="audio")
-    )
-    
-    try:
-        with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
-            info = ydl.extract_info(url, download=False)
-            title = info.get('title', 'Video')
-            duration = info.get('duration', 0) or 0
-            mins, secs = divmod(duration, 60)
+    # 5. خيارات التحميل (فيديو/صوت) بعد جلب الرابط
+    elif call.data in ["dl_video", "dl_audio"]:
+        url = user_links.get(user_id)
+        if not url:
+            bot.answer_callback_query(call.id, "❌ انتهت الجلسة.")
+            return
             
-            caption = f"🎬 <b>{title}</b>\n⏱️ {mins}:{secs:02d}\n\nاختر الصيغة:"
-            bot.edit_message_text(caption, message.chat.id, wait_msg.message_id, parse_mode="HTML", reply_markup=markup)
-    except Exception as e:
-        logging.error("YTDL Error: %s", e)
-        bot.edit_message_text("❌ لم يتم العثور على الفيديو.", message.chat.id, wait_msg.message_id)
+        bot.edit_message_text("⏳ **جاري التحميل...**", chat_id, call.message.message_id, parse_mode="Markdown")
+        process_media_download(chat_id, call.message.message_id, url, call.data)
 
-@bot.callback_query_handler(func=lambda call: call.data in ("video", "audio"))
-def process_download(call):
-    if not check_access(call): return
-    chat_id = call.message.chat.id
-    msg_id = call.message.message_id
-    
-    url = user_links.get(call.from_user.id)
-    if not url:
-        bot.answer_callback_query(call.id, "❌ انتهت الجلسة.")
-        return
+# ===== معالجة الرسائل (المدخلات اليدوية فقط) =====
 
-    bot.edit_message_text("⏳ **جاري التحميل...**", chat_id, msg_id, parse_mode="Markdown")
+@bot.message_handler(func=lambda m: True, content_types=['text', 'photo'])
+def handle_inputs(message):
+    chat_id = message.chat.id
+    user_id = message.from_user.id
     
+    if not check_access(message): return
+    
+    state = user_state.get(chat_id)
+    
+    # حالة انتظار الرابط
+    if state == "waiting_link" and message.text:
+        # حذف رسالة المستخدم لتنظيف الشات (اختياري، يفضله البعض)
+        try: bot.delete_message(chat_id, message.message_id)
+        except: pass
+        
+        # حذف رسالة البوت السابقة (طلب الرابط)
+        delete_last_menu(chat_id)
+
+        url = message.text.strip()
+        platform = user_platform.get(user_id)
+        
+        # تحقق بسيط
+        if platform == "تيك توك" and "tiktok" not in url and "تيك توك" not in url:
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="menu_download"))
+            sent = bot.send_message(chat_id, "❌ الرابط لا يبدو صحيحاً.", reply_markup=markup)
+            save_menu_id(chat_id, sent.message_id)
+            return
+
+        user_links[user_id] = url
+        
+        # إرسال رسالة المعالجة
+        wait_msg = bot.send_message(chat_id, "🎬 جاري جلب المعلومات...")
+        
+        try:
+            with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
+                info = ydl.extract_info(url, download=False)
+                title = info.get('title', 'Video')[:100]
+                duration = info.get('duration', 0)
+                mins, secs = divmod(duration, 60)
+                
+                caption = f"🎬 <b>{title}</b>\n⏱️ {mins}:{secs:02d}\n\nاختر الصيغة:"
+                markup = types.InlineKeyboardMarkup()
+                markup.add(
+                    types.InlineKeyboardButton("🎥 فيديو (MP4)", callback_data="dl_video"),
+                    types.InlineKeyboardButton("🎵 صوت (MP3)", callback_data="dl_audio")
+                )
+                markup.add(types.InlineKeyboardButton("🔙 إلغاء", callback_data="menu_download"))
+                
+                bot.edit_message_text(caption, chat_id, wait_msg.message_id, parse_mode="HTML", reply_markup=markup)
+                save_menu_id(chat_id, wait_msg.message_id)
+                
+        except Exception as e:
+            logging.error("YTDL Info Error: %s", e)
+            markup = types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("🔙 رجوع", callback_data="menu_download"))
+            bot.edit_message_text("❌ لم يتم العثور على الفيديو.", chat_id, wait_msg.message_id, reply_markup=markup)
+            save_menu_id(chat_id, wait_msg.message_id)
+
+    # حالة انتظار اسم الراوتر
+    elif state == "waiting_ssid" and message.text:
+        # لا نحذف رسالة المستخدم هنا لأنه يكتب نصاً
+        delete_last_menu(chat_id)
+        
+        ssid = message.text.strip().lower()
+        pw = generate_wifi_password(ssid)
+        
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔁 مرة أخرى", callback_data="wifi_manual"))
+        markup.add(types.InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="back_to_main"))
+        
+        if pw:
+            res = f"✅ <b>{ssid}</b>\n🔑 <code>{pw}</code>"
+            sent = bot.send_message(chat_id, res, parse_mode="HTML", reply_markup=markup)
+        else:
+            sent = bot.send_message(chat_id, "❌ صيغة غير صحيحة أو شبكة غير مدعومة.", reply_markup=markup)
+        save_menu_id(chat_id, sent.message_id)
+
+    # حالة انتظار صورة الراوتر
+    elif state == "waiting_wifi_photo" and message.photo:
+        delete_last_menu(chat_id)
+        process_wifi_image(message)
+
+    # أي رسالة أخرى في غير وقتها
+    else:
+        # إذا أرسل المستخدم رسالة عشوائية، نعيد عرض القائمة الرئيسية
+        delete_last_menu(chat_id)
+        send_main_menu(chat_id)
+
+
+# ===== دوال المعالجة (Logic) =====
+
+def process_media_download(chat_id, msg_id, url, action):
     tmpdir = tempfile.mkdtemp()
-    action = call.data
-    
     try:
         ydl_opts = {
             'outtmpl': os.path.join(tmpdir, '%(title)s.%(ext)s'),
             'format': 'best',
-            'noplaylist': True,
             'quiet': True,
         }
-        if action == "audio":
+        if action == "dl_audio":
             ydl_opts['postprocessors'] = [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3','preferredquality': '192'}]
             
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
-            if action == "video": filename = ydl.prepare_filename(info)
+            if action == "dl_video": filename = ydl.prepare_filename(info)
             else: filename = ydl.prepare_filename(info).rsplit('.', 1)[0] + ".mp3"
 
         if os.path.exists(filename) and os.path.getsize(filename) < 50*1024*1024:
             with open(filename, "rb") as f:
-                if action == "video": bot.send_video(chat_id, f, caption="✅ تم!")
-                else: bot.send_audio(chat_id, f, caption="✅ تم!")
-            # [تنظيف] حذف رسالة "جاري التحميل" بعد الإرسال
+                if action == "dl_video": bot.send_video(chat_id, f, caption="✅ تم التحميل!")
+                else: bot.send_audio(chat_id, f, caption="✅ تم التحميل!")
+            
+            # حذف رسالة الانتظار
             try: bot.delete_message(chat_id, msg_id)
             except: pass
+            
+            # عرض زر للعودة
+            markup = types.InlineKeyboardMarkup()
+            markup.add(types.InlineKeyboardButton("📥 تحميل آخر", callback_data="menu_download"))
+            markup.add(types.InlineKeyboardButton("🏠 القائمة الرئيسية", callback_data="back_to_main"))
+            sent = bot.send_message(chat_id, "💡 ماذا تريد أن تفعل الآن؟", reply_markup=markup)
+            save_menu_id(chat_id, sent.message_id)
         else:
-            bot.edit_message_text("❌ الملف كبير جداً.", chat_id, msg_id)
+            markup = types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("🔙 رجوع", callback_data="menu_download"))
+            bot.edit_message_text("❌ الملف كبير جداً (أكبر من 50MB).", chat_id, msg_id, reply_markup=markup)
 
     except Exception as e:
-        logging.error("DL error: %s", e)
-        bot.edit_message_text("❌ فشل التحميل.", chat_id, msg_id)
+        logging.error("DL Error: %s", e)
+        markup = types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("🔙 رجوع", callback_data="menu_download"))
+        try: bot.edit_message_text("❌ فشل التحميل.", chat_id, msg_id, reply_markup=markup)
+        except: pass
     finally:
         try:
             for f in os.listdir(tmpdir): os.remove(os.path.join(tmpdir, f))
             os.rmdir(tmpdir)
         except: pass
-
-    # خيارات ما بعد التحميل
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
-    markup.add("منصة أخرى", "🔙 رجوع")
-    send_and_track(chat_id, "💡 ماذا تريد أن تفعل الآن؟", reply_markup=markup)
-    user_state[chat_id] = "waiting_link"
-
-# --- قسم WiFi ---
-def show_wifi_methods(chat_id):
-    delete_last_bot_msg(chat_id)
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add("✍️ كتابة اسم الراوتر", "🖼️ صورة لجميع الراوترات", "🔙 رجوع")
     
-    send_and_track(chat_id, "📡 اختر طريقة إدخال اسم الراوتر:", reply_markup=markup)
-    user_state[chat_id] = "wifi_methods"
+    # إعادة تعيين الحالة لتجنب تكرار الإرسال
+    user_state[chat_id] = "menu_download"
 
-@bot.message_handler(func=lambda m: m.text == "📡 أداة اختراق WiFi fh")
-def wifi_request(message):
-    if not check_access(message): return
-    show_wifi_methods(message.chat.id)
-
-@bot.message_handler(func=lambda m: m.text == "✍️ كتابة اسم الراوتر")
-def manual_ssid(message):
-    if not check_access(message): return
-    delete_last_bot_msg(message.chat.id)
-    
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add("🔙 رجوع")
-    sent = bot.send_message(message.chat.id, "🔍 أرسل اسم شبكة WiFi (يجب أن تبدأ بـ fh_):", reply_markup=markup)
-    # تتبع يدوي للرسالة
-    user_last_bot_message[message.chat.id] = sent.message_id
-    
-    bot.register_next_step_handler(sent, generate_password_with_back)
-    user_state[message.chat.id] = "wifi_name_or_image"
-
-def generate_password_with_back(message):
-    if message.text == "🔙 رجوع":
-        show_wifi_methods(message.chat.id)
-        return
-    generate_password(message)
-
-@bot.message_handler(func=lambda m: m.text == "🖼️ صورة لجميع الراوترات")
-def ask_for_wifi_image(message):
-    if not check_access(message): return
-    delete_last_bot_msg(message.chat.id)
-    
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add("🔙 رجوع")
-    sent = bot.send_message(message.chat.id, "📸 أرسل صورة للقائمة:", reply_markup=markup)
-    user_last_bot_message[message.chat.id] = sent.message_id
-    
-    bot.register_next_step_handler(sent, process_wifi_image_with_back)
-    user_state[message.chat.id] = "wifi_name_or_image"
-
-def process_wifi_image_with_back(message):
-    if message.text == "🔙 رجوع":
-        show_wifi_methods(message.chat.id)
-        return
-    process_wifi_image(message)
-
-# دوال المعالجة المنطقية
+# --- WiFi Logic ---
 def smart_correct_ssid(ssid):
-    # دعم اللواحق: fh_xxxx_5g -> fh_xxxx
     parts = ssid.split('_')
     if len(parts) >= 2: ssid = f"{parts[0]}_{parts[1]}"
-    
     if ssid.startswith("fh_"):
         prefix, rest = "fh_", ssid[3:]
         rest = rest.replace('l', '1').replace('I', '1').replace('O', '0').replace('o', '0')
@@ -659,39 +560,27 @@ def generate_wifi_password(ssid):
     ssid = ssid.strip().lower()
     parts = ssid.split('_')
     if len(parts) < 2 or parts[0] != "fh": return None
-    
     hex_part = parts[1]
     if not all(c in '0123456789abcdef' for c in hex_part): return None
-    
     table = {'0':'f','1':'e','2':'d','3':'c','4':'b','5':'a','6':'9','7':'8','8':'7','9':'6','a':'5','b':'4','c':'3','d':'2','e':'1','f':'0'}
     encoded = ''.join(table.get(c, c) for c in hex_part)
     return f"wlan{encoded}"
 
 def process_wifi_image(message):
-    if not check_access(message): return
-    
-    wait_msg = bot.send_message(message.chat.id, "⏳ جاري المعالجة...")
+    chat_id = message.chat.id
+    wait_msg = bot.send_message(chat_id, "⏳ جاري المعالجة...")
     
     try:
-        if not message.photo:
-            bot.delete_message(message.chat.id, wait_msg.message_id)
-            bot.send_message(message.chat.id, "❌ ليست صورة.")
-            return
-        
         file_info = bot.get_file(message.photo[-1].file_id)
         downloaded = bot.download_file(file_info.file_path)
         img = Image.open(io.BytesIO(downloaded))
-        
-        # تحسين الحجم
         if img.width > 800: img = img.resize((800, int(800*img.height/img.width)))
         
-        # OCR
         texts = [pytesseract.image_to_string(img)]
         texts.append(pytesseract.image_to_string(img.convert('L').point(lambda x: 0 if x<140 else 255, '1')))
         
         all_ssids = set()
         for t in texts:
-            # Regex يلتقط fh_xxxx أو fh_xxxx_yyy
             found = re.findall(r'(fh_[a-fA-F0-9]+(?:_[a-zA-Z0-9]+)?)', t, re.IGNORECASE)
             for s in found:
                 corrected = smart_correct_ssid(s.lower())
@@ -699,12 +588,15 @@ def process_wifi_image(message):
                 if len(parts) >= 2 and all(c in '0123456789abcdef' for c in parts[1]):
                     all_ssids.add(corrected)
         
-        bot.delete_message(message.chat.id, wait_msg.message_id)
+        bot.delete_message(chat_id, wait_msg.message_id)
         
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🔁 صورة أخرى", callback_data="wifi_photo"))
+        markup.add(types.InlineKeyboardButton("🏠 القائمة الرئيسية", callback_data="back_to_main"))
+
         if not all_ssids:
-            markup = types.ReplyKeyboardMarkup(resize_keyboard=True).add("🔙 رجوع")
-            bot.send_message(message.chat.id, "❌ لم يتم العثور على شبكات fh.", reply_markup=markup)
-            bot.register_next_step_handler(message, process_wifi_image_with_back)
+            sent = bot.send_message(chat_id, "❌ لم يتم العثور على شبكات fh.", reply_markup=markup)
+            save_menu_id(chat_id, sent.message_id)
             return
 
         reply = ""
@@ -712,31 +604,14 @@ def process_wifi_image(message):
             pw = generate_wifi_password(ssid)
             if pw: reply += f"📶 <b>{ssid}</b>\n🔑 <code>{pw}</code>\n\n"
             
-        markup = types.ReplyKeyboardMarkup(resize_keyboard=True).add("🔁 مرة أخرى", "🔙 رجوع")
-        send_and_track(message.chat.id, reply or "❌ شبكات غير مدعومة", reply_markup=markup, parse_mode="HTML")
+        sent = bot.send_message(chat_id, reply or "❌ شبكات غير مدعومة", reply_markup=markup, parse_mode="HTML")
+        save_menu_id(chat_id, sent.message_id)
 
     except Exception as e:
         logging.error("OCR Error: %s", e)
-        try: bot.delete_message(message.chat.id, wait_msg.message_id)
+        try: bot.delete_message(chat_id, wait_msg.message_id)
         except: pass
-
-def generate_password(message):
-    if not check_access(message): return
-    ssid = message.text.strip().lower()
-    
-    # دالة التوليد تتعامل الآن مع اللواحق
-    pw = generate_wifi_password(ssid) 
-    
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True).add("🔁 مرة أخرى", "🔙 رجوع")
-    
-    if pw:
-        send_and_track(message.chat.id, f"✅ <b>{ssid}</b>\n🔑 <code>{pw}</code>", reply_markup=markup, parse_mode="HTML")
-    else:
-        bot.send_message(message.chat.id, "❌ صيغة خاطئة أو شبكة غير مدعومة.", reply_markup=markup)
-
-@bot.message_handler(func=lambda m: True)
-def fallback(message):
-    if check_access(message): show_main_menu(message.chat.id)
+        bot.send_message(chat_id, "❌ حدث خطأ في المعالجة.")
 
 # ===== Webhook =====
 @app.route('/webhook', methods=['POST'])
@@ -749,6 +624,8 @@ def webhook():
     return '', 403
 
 if __name__ == '__main__':
-    bot.remove_webhook()
-    bot.set_webhook(url=WEBHOOK_URL)
+    try:
+        bot.remove_webhook()
+        bot.set_webhook(url=WEBHOOK_URL)
+    except: pass
     app.run(host="0.0.0.0", port=PORT)
