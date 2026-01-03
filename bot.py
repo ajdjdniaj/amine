@@ -1,4 +1,4 @@
-# bot.py (نسخة الأزرار العريضة - Full Width Buttons)
+# bot.py (النسخة الكاملة: واجهة أزرار شفافة + أدوات المالك + واي فاي + تحميل)
 import os
 import time
 import tempfile
@@ -237,16 +237,13 @@ def check_access(message_or_call):
         return False
     return True
 
-# ===== القوائم (Inline Menus - معدلة لتكون كبيرة) =====
+# ===== القوائم (Inline Menus - كبيرة) =====
 
 def send_main_menu(chat_id, edit_msg_id=None):
-    """إرسال القائمة الرئيسية (أزرار تحت بعضها)"""
-    # row_width=1 يجعل كل زر في سطر كامل
+    """إرسال القائمة الرئيسية"""
     markup = types.InlineKeyboardMarkup(row_width=1)
-    
     markup.add(types.InlineKeyboardButton("🎬 أداة تحميل mp3/mp4", callback_data="menu_download"))
     markup.add(types.InlineKeyboardButton("📡 أداة اختراق WiFi fh", callback_data="menu_wifi"))
-    
     text = "👋 أهلاً بك!\n✨ اختر الخدمة:"
     
     if edit_msg_id:
@@ -254,21 +251,16 @@ def send_main_menu(chat_id, edit_msg_id=None):
             bot.edit_message_text(text, chat_id, edit_msg_id, reply_markup=markup)
             save_menu_id(chat_id, edit_msg_id)
             return
-        except:
-            pass
-            
+        except: pass
     sent = bot.send_message(chat_id, text, reply_markup=markup)
     save_menu_id(chat_id, sent.message_id)
 
 def send_download_menu(chat_id, edit_msg_id=None):
-    # row_width=1 لتكبير الأزرار
     markup = types.InlineKeyboardMarkup(row_width=1)
-    
     markup.add(types.InlineKeyboardButton("🔴 يوتيوب", callback_data="platform_youtube"))
     markup.add(types.InlineKeyboardButton("🟣 انستغرام", callback_data="platform_instagram"))
     markup.add(types.InlineKeyboardButton("⚫ تيك توك", callback_data="platform_tiktok"))
     markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="back_to_main"))
-    
     text = "✨ اختر المنصة للتحميل:\n(mp4/mp3)"
     
     if edit_msg_id:
@@ -276,18 +268,14 @@ def send_download_menu(chat_id, edit_msg_id=None):
             bot.edit_message_text(text, chat_id, edit_msg_id, reply_markup=markup)
             return
         except: pass
-    
     sent = bot.send_message(chat_id, text, reply_markup=markup)
     save_menu_id(chat_id, sent.message_id)
 
 def send_wifi_menu(chat_id, edit_msg_id=None):
-    # row_width=1 لتكبير الأزرار
     markup = types.InlineKeyboardMarkup(row_width=1)
-    
     markup.add(types.InlineKeyboardButton("✍️ كتابة اسم الراوتر", callback_data="wifi_manual"))
     markup.add(types.InlineKeyboardButton("🖼️ صورة لجميع الراوترات", callback_data="wifi_photo"))
     markup.add(types.InlineKeyboardButton("🔙 رجوع", callback_data="back_to_main"))
-    
     text = "📡 اختر الطريقة:"
     
     if edit_msg_id:
@@ -295,18 +283,147 @@ def send_wifi_menu(chat_id, edit_msg_id=None):
             bot.edit_message_text(text, chat_id, edit_msg_id, reply_markup=markup)
             return
         except: pass
-    
     sent = bot.send_message(chat_id, text, reply_markup=markup)
     save_menu_id(chat_id, sent.message_id)
 
-# ===== Handlers =====
+# ================================
+# ===== أوامر المالك (ADMIN) =====
+# ================================
+
+@bot.message_handler(commands=['get_users'])
+def get_users_handler(message):
+    if int(message.from_user.id) != OWNER_ID: return
+    try:
+        delete_last_menu(message.chat.id) # تنظيف
+        conn = get_db_conn()
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT user_id, first_seen FROM users ORDER BY first_seen DESC")
+                rows = cur.fetchall()
+        put_db_conn(conn)
+        
+        if not rows:
+            bot.send_message(message.chat.id, "لا يوجد مستخدمين.")
+            return
+            
+        fd, path = tempfile.mkstemp(suffix=".csv")
+        with os.fdopen(fd, "w", newline='', encoding='utf-8') as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow(["user_id", "first_seen"])
+            for r in rows: writer.writerow([r['user_id'], r['first_seen']])
+            
+        with open(path, "rb") as f:
+            bot.send_document(message.chat.id, f, caption="Users CSV")
+        try: os.remove(path)
+        except: pass
+    except Exception as e:
+        bot.send_message(message.chat.id, "Error fetching users.")
+
+@bot.message_handler(commands=['get_banned'])
+def get_banned_handler(message):
+    if int(message.from_user.id) != OWNER_ID: return
+    try:
+        delete_last_menu(message.chat.id)
+        conn = get_db_conn()
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT user_id, ban_until FROM bans ORDER BY ban_until DESC")
+                rows = cur.fetchall()
+        put_db_conn(conn)
+        
+        if not rows:
+            bot.send_message(message.chat.id, "لا يوجد محظورين.")
+            return
+            
+        fd, path = tempfile.mkstemp(suffix=".csv")
+        with os.fdopen(fd, "w", newline='', encoding='utf-8') as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow(["user_id", "ban_until"])
+            for r in rows: writer.writerow([r['user_id'], r['ban_until']])
+            
+        with open(path, "rb") as f:
+            bot.send_document(message.chat.id, f, caption="Banned CSV")
+        try: os.remove(path)
+        except: pass
+    except: pass
+
+@bot.message_handler(commands=['stats'])
+def stats_handler(message):
+    if int(message.from_user.id) != OWNER_ID: return
+    try:
+        delete_last_menu(message.chat.id)
+        conn = get_db_conn()
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) AS c FROM users")
+                u = cur.fetchone()['c']
+                cur.execute("SELECT COUNT(*) AS c FROM joined_users")
+                j = cur.fetchone()['c']
+                cur.execute("SELECT COUNT(*) AS c FROM bans WHERE ban_until > now()")
+                b = cur.fetchone()['c']
+        put_db_conn(conn)
+        bot.send_message(message.chat.id, f"📊 Stats:\n👥 Users: {u}\n✅ Joined: {j}\n⛔ Banned: {b}")
+    except: pass
+
+@bot.message_handler(commands=['get_joined'])
+def get_joined_handler(message):
+    if int(message.from_user.id) != OWNER_ID: return
+    try:
+        delete_last_menu(message.chat.id)
+        conn = get_db_conn()
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT user_id, joined_at FROM joined_users ORDER BY joined_at DESC")
+                rows = cur.fetchall()
+        put_db_conn(conn)
+        if not rows:
+            bot.send_message(message.chat.id, "لا يوجد من نفذ الشرط.")
+            return
+        fd, path = tempfile.mkstemp(suffix=".csv")
+        with os.fdopen(fd, "w", newline='', encoding='utf-8') as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow(["user_id", "joined_at"])
+            for r in rows: writer.writerow([r['user_id'], r['joined_at']])
+        with open(path, "rb") as f:
+            bot.send_document(message.chat.id, f, caption="Joined Users CSV")
+        os.remove(path)
+    except: pass
+
+@bot.message_handler(commands=['ban_user'])
+def ban_user_command(message):
+    if int(message.from_user.id) != OWNER_ID: return
+    try:
+        parts = message.text.split()
+        if len(parts) == 2:
+            ban_user(parts[1], 3153600000) # 100 years
+            bot.reply_to(message, f"⛔ تم حظر المستخدم {parts[1]} نهائياً.")
+        else:
+            bot.reply_to(message, "Usage: /ban_user user_id")
+    except: pass
+
+@bot.message_handler(commands=['unban_user'])
+def unban_user_command(message):
+    if int(message.from_user.id) != OWNER_ID: return
+    try:
+        parts = message.text.split()
+        if len(parts) == 2:
+            conn = get_db_conn()
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute("DELETE FROM bans WHERE user_id=%s", (int(parts[1]),))
+            put_db_conn(conn)
+            bot.reply_to(message, f"✅ تم إلغاء حظر {parts[1]}.")
+        else:
+            bot.reply_to(message, "Usage: /unban_user user_id")
+    except: pass
+
+# ===== Handlers (المستخدمين) =====
 
 @bot.message_handler(commands=['start'])
 def start_handler(message):
     user_id = message.from_user.id
     save_user(user_id)
     delete_last_menu(message.chat.id)
-    
     if check_access(message):
         send_main_menu(message.chat.id)
 
@@ -333,8 +450,7 @@ def handle_callbacks(call):
             bot.answer_callback_query(call.id, "❌ ما زلت محظوراً.")
         return
 
-    if not check_access(call):
-        return
+    if not check_access(call): return
 
     # 2. التنقل
     if call.data == "back_to_main":
@@ -396,7 +512,7 @@ def handle_callbacks(call):
         bot.edit_message_text("⏳ **جاري التحميل...**", chat_id, call.message.message_id, parse_mode="Markdown")
         process_media_download(chat_id, call.message.message_id, url, call.data)
 
-# ===== معالجة الرسائل =====
+# ===== معالجة الرسائل (Inputs) =====
 
 @bot.message_handler(func=lambda m: True, content_types=['text', 'photo'])
 def handle_inputs(message):
@@ -473,6 +589,7 @@ def handle_inputs(message):
         process_wifi_image(message)
 
     else:
+        # رسائل عشوائية -> إعادة القائمة الرئيسية
         delete_last_menu(chat_id)
         send_main_menu(chat_id)
 
@@ -498,7 +615,6 @@ def process_media_download(chat_id, msg_id, url, action):
             with open(filename, "rb") as f:
                 if action == "dl_video": bot.send_video(chat_id, f, caption="✅ تم التحميل!")
                 else: bot.send_audio(chat_id, f, caption="✅ تم التحميل!")
-            
             try: bot.delete_message(chat_id, msg_id)
             except: pass
             
