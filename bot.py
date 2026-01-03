@@ -205,13 +205,19 @@ def check_access(message_or_call):
         chat_id = message_or_call.chat.id
 
     ban_left = is_banned(user_id)
-    if ban_left > 0:
-        mins = (ban_left % 3600) // 60
+if ban_left > 0:
+        # --- التعديل هنا ---
+        mins = ban_left // 60      # حساب الدقائق
+        secs = ban_left % 60       # حساب الثواني المتبقية
+        
         markup = types.InlineKeyboardMarkup(row_width=1)
         markup.add(types.InlineKeyboardButton("📢 انضم للقناة", url=f"https://t.me/{CHANNEL_USERNAME}"))
         markup.add(types.InlineKeyboardButton("✅ تحقق من جديد", callback_data="recheck_ban"))
         
-        text = f"❌ تم حظرك لمدة 5 دقائق لعدم وجودك في القناة.\nالمتبقي: {mins} دقيقة."
+        # تعديل النص ليشمل الثواني
+        text = f"❌ تم حظرك لمدة 5 دقائق بسبب عدم وجودك في القناة الرئيسية.\nالمتبقي: {mins} دقيقة و {secs} ثانية."
+        # -------------------
+
         if isinstance(message_or_call, telebot.types.CallbackQuery):
             try: bot.edit_message_text(text, chat_id, message_or_call.message.message_id, reply_markup=markup)
             except: pass
