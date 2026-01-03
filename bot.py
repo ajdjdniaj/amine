@@ -205,19 +205,15 @@ def check_access(message_or_call):
         chat_id = message_or_call.chat.id
 
     ban_left = is_banned(user_id)
-if ban_left > 0:
-        # --- التعديل هنا ---
-        mins = ban_left // 60      # حساب الدقائق
-        secs = ban_left % 60       # حساب الثواني المتبقية
+    if ban_left > 0:
+        mins = ban_left // 60
+        secs = ban_left % 60
         
         markup = types.InlineKeyboardMarkup(row_width=1)
         markup.add(types.InlineKeyboardButton("📢 انضم للقناة", url=f"https://t.me/{CHANNEL_USERNAME}"))
         markup.add(types.InlineKeyboardButton("✅ تحقق من جديد", callback_data="recheck_ban"))
         
-        # تعديل النص ليشمل الثواني
-        text = f"❌ تم حظرك لمدة 5 دقائق بسبب عدم وجودك في القناة الرئيسية.\nالمتبقي: {mins} دقيقة و {secs} ثانية."
-        # -------------------
-
+        text = f"❌ تم حظرك لمدة 5 دقائق.\nالمتبقي: {mins} دقيقة و {secs} ثانية."
         if isinstance(message_or_call, telebot.types.CallbackQuery):
             try: bot.edit_message_text(text, chat_id, message_or_call.message.message_id, reply_markup=markup)
             except: pass
@@ -225,7 +221,9 @@ if ban_left > 0:
             bot.send_message(chat_id, text, reply_markup=markup)
         return False
 
-        if not is_user_joined(user_id):
+    # هنا كان الخطأ، لاحظ المسافات في الأسطر التالية
+    if not is_user_joined(user_id):
+        # هذا السطر والأسطر تحته يجب أن تكون مزاحة لليمين
         if has_joined_before(user_id):
             ban_user(user_id)
             return check_access(message_or_call)
@@ -234,6 +232,7 @@ if ban_left > 0:
             markup.add(types.InlineKeyboardButton("📢 انضم للقناة", url=f"https://t.me/{CHANNEL_USERNAME}"))
             markup.add(types.InlineKeyboardButton("✅ تحقق", callback_data="check_join"))
             text = "🔒 يجب الانضمام للقناة أولاً لاستخدام البوت."
+            
             if isinstance(message_or_call, telebot.types.CallbackQuery):
                 try: bot.edit_message_text(text, chat_id, message_or_call.message.message_id, reply_markup=markup)
                 except: pass
@@ -241,7 +240,9 @@ if ban_left > 0:
                 sent = bot.send_message(chat_id, text, reply_markup=markup)
                 save_menu_id(chat_id, sent.message_id)
         return False
+    
     return True
+
 
 # ===== القوائم (Inline Menus - كبيرة) =====
 
