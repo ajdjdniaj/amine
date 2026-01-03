@@ -225,7 +225,7 @@ if ban_left > 0:
             bot.send_message(chat_id, text, reply_markup=markup)
         return False
 
-    if not is_user_joined(user_id):
+        if not is_user_joined(user_id):
         if has_joined_before(user_id):
             ban_user(user_id)
             return check_access(message_or_call)
