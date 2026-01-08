@@ -731,7 +731,13 @@ def wifi_again_handler(message):
     if not check_access(message):
         return
     show_wifi_methods(message.chat.id)
-
+    
+@bot.message_handler(func=lambda m: m.text == "🔁 اختراق WiFi آخر")
+def wifi_again_handler(message):
+    if not check_access(message):
+        return
+    show_wifi_methods(message.chat.id)
+    
 @bot.message_handler(func=lambda m: True)
 def fallback_handler(message):
     if not check_access(message):
