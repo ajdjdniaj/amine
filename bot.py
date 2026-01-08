@@ -681,7 +681,7 @@ def webhook():
 def index():
     return "Webhook set!", 200
 
-if __name__ == 'main': # تم تصحيح name إلى __name__
+if __name__ == '__main__':  # لاحظ الشرطات السفلية قبل وبعد الكلمات
     try:
         bot.remove_webhook()
         bot.set_webhook(url=WEBHOOK_URL)
