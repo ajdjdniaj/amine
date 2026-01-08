@@ -75,7 +75,7 @@ init_db()
 
 # ===== إعداد البوت و Flask =====
 bot = telebot.TeleBot(BOT_TOKEN)
-app = Flask(__name__) # تم تصحيح name إلى __name__ تلقائياً ليعمل الكود، إذا لم يعمل أعدها name
+app = Flask(__name__)
 
 # ===== هياكل الذاكرة المؤقتة =====
 user_links = {}
@@ -215,7 +215,6 @@ def check_access(message_or_call):
         user_id = message_or_call.from_user.id
         chat_id = message_or_call.chat.id
     
-    # text
     ban_left = is_banned(user_id)
     if ban_left > 0:
         send_ban_with_check(chat_id, ban_left)
@@ -228,6 +227,145 @@ def check_access(message_or_call):
             send_warning_join(chat_id)
         return False
     return True
+
+# ===== أوامر المالك (ADMIN COMMANDS) =====
+@bot.message_handler(commands=['get_users'])
+def get_users_handler(message):
+    if int(message.from_user.id) != OWNER_ID:
+        return
+    try:
+        conn = get_db_conn()
+        rows = []
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT user_id, first_seen FROM users ORDER BY first_seen DESC")
+                rows = cur.fetchall()
+        put_db_conn(conn)
+
+        if not rows:
+            bot.send_message(message.chat.id, "لا يوجد مستخدمين بعد.")
+            return
+
+        fd, path = tempfile.mkstemp(suffix=".csv")
+        try:
+            with os.fdopen(fd, "w", newline='', encoding='utf-8') as csvfile:
+                writer = csv.writer(csvfile)
+                writer.writerow(["user_id", "first_seen"])
+                for r in rows:
+                    writer.writerow([r['user_id'], r['first_seen']])
+            with open(path, "rb") as f:
+                bot.send_document(message.chat.id, f, caption="قائمة معرفات المستخدمين (CSV)")
+        finally:
+            try:
+                os.remove(path)
+            except:
+                pass
+    except Exception as e:
+        bot.send_message(message.chat.id, "حدث خطأ أثناء جلب المستخدمين.")
+
+@bot.message_handler(commands=['get_banned'])
+def get_banned_handler(message):
+    if int(message.from_user.id) != OWNER_ID:
+        return
+    try:
+        conn = get_db_conn()
+        rows = []
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT user_id, ban_until FROM bans ORDER BY ban_until DESC")
+                rows = cur.fetchall()
+        put_db_conn(conn)
+
+        if not rows:
+            bot.send_message(message.chat.id, "لا يوجد محظورين.")
+            return
+
+        fd, path = tempfile.mkstemp(suffix=".csv")
+        try:
+            with os.fdopen(fd, "w", newline='', encoding='utf-8') as csvfile:
+                writer = csv.writer(csvfile)
+                writer.writerow(["user_id", "ban_until"])
+                for r in rows:
+                    writer.writerow([r['user_id'], r['ban_until']])
+            with open(path, "rb") as f:
+                bot.send_document(message.chat.id, f, caption="قائمة المحظورين (CSV)")
+        finally:
+            try:
+                os.remove(path)
+            except:
+                pass
+    except Exception as e:
+        bot.send_message(message.chat.id, "حدث خطأ أثناء جلب المحظورين.")
+
+@bot.message_handler(commands=['get_joined'])
+def get_joined_handler(message):
+    if int(message.from_user.id) != OWNER_ID:
+        return
+    try:
+        conn = get_db_conn()
+        rows = []
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT user_id, joined_at FROM joined_users ORDER BY joined_at DESC")
+                rows = cur.fetchall()
+        put_db_conn(conn)
+
+        if not rows:
+            bot.send_message(message.chat.id, "لا يوجد من نفذ الشرط بعد.")
+            return
+
+        fd, path = tempfile.mkstemp(suffix=".csv")
+        try:
+            with os.fdopen(fd, "w", newline='', encoding='utf-8') as csvfile:
+                writer = csv.writer(csvfile)
+                writer.writerow(["user_id", "joined_at"])
+                for r in rows:
+                    writer.writerow([r['user_id'], r['joined_at']])
+            with open(path, "rb") as f:
+                bot.send_document(message.chat.id, f, caption="قائمة من نفّذوا الشرط (CSV)")
+        finally:
+            try:
+                os.remove(path)
+            except:
+                pass
+    except Exception as e:
+        bot.send_message(message.chat.id, "حدث خطأ أثناء جلب القائمة.")
+
+@bot.message_handler(commands=['ban_user'])
+def ban_user_command(message):
+    if int(message.from_user.id) != OWNER_ID:
+        return
+    try:
+        parts = message.text.split()
+        if len(parts) != 2:
+            bot.reply_to(message, "استخدم الأمر بهذا الشكل:\n/ban_user user_id")
+            return
+        user_id = parts[1]
+        ban_user(user_id, duration=100*365*24*60*60)
+        bot.reply_to(message, f"تم حظر المستخدم {user_id} نهائيًا.")
+    except Exception as e:
+        bot.reply_to(message, "حدث خطأ أثناء الحظر.")
+
+@bot.message_handler(commands=['unban_user'])
+def unban_user_command(message):
+    if int(message.from_user.id) != OWNER_ID:
+        return
+    try:
+        parts = message.text.split()
+        if len(parts) != 2:
+            bot.reply_to(message, "استخدم الأمر بهذا الشكل:\n/unban_user user_id")
+            return
+        user_id = parts[1]
+        conn = get_db_conn()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute("DELETE FROM bans WHERE user_id = %s", (int(user_id),))
+            bot.reply_to(message, f"تم إلغاء الحظر عن المستخدم {user_id}.")
+        finally:
+            put_db_conn(conn)
+    except Exception as e:
+        bot.reply_to(message, "حدث خطأ أثناء إلغاء الحظر.")
 
 # ===== واجهة البوت =====
 def show_main_menu(chat_id, msg_only=False):
@@ -333,6 +471,14 @@ def choose_downloader(message):
 def ask_for_link(message):
     if not check_access(message):
         return
+    
+    # ===== كود الصيانة لمنصات معينة =====
+    if message.text in ["يوتيوب", "انستغرام"]:
+        bot.send_message(message.chat.id, "⚠️ عذراً، هذه الخدمة في وضع الصيانة حالياً. يرجى اختيار منصة أخرى.", 
+                         reply_markup=types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True).add("🔙 رجوع"))
+        return
+    # ==================================
+
     user_platform[message.from_user.id] = message.text
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
     markup.add("🔙 رجوع")
@@ -366,7 +512,6 @@ def handle_link(message):
         send_platforms(message.chat.id)
         return
     
-    # text
     platform = user_platform.get(message.from_user.id)
     url = message.text.strip()
     user_links[message.from_user.id] = url
@@ -414,9 +559,6 @@ def process_download_threaded(call, url, action):
             else:
                 filename = ydl.prepare_filename(info).rsplit('.', 1)[0] + ".mp3"
         
-        # text
-        # text
-
         if not os.path.exists(filename):
             bot.edit_message_text("❌ فشل التحميل أو الملف غير موجود.", call.message.chat.id, msg.message_id)
         else:
@@ -515,7 +657,7 @@ def extract_ssids_from_text(text):
     return re.findall(r'(fh_[a-zA-Z0-9]+(?:_[a-zA-Z0-9]+)?)', text)
 
 def smart_correct_ssid(ssid):
-    parts = ssid.split('') # قد تسبب خطأ runtime لأن الفاصل فارغ، لكن لم أغيرها بناء على طلبك بعدم تغيير المحتوى
+    parts = ssid.split('') 
     if len(parts) >= 2:
         ssid = f"{parts[0]}{parts[1]}"
     if ssid.startswith("fh_"):
@@ -542,7 +684,6 @@ def process_wifi_image(message):
         bot.send_message(message.chat.id, "❌ حدث خطأ أثناء تنزيل الصورة.")
         return
     
-    # text
     max_width = 800
     if image.width > max_width:
         ratio = max_width / image.width
@@ -681,7 +822,7 @@ def webhook():
 def index():
     return "Webhook set!", 200
 
-if __name__ == '__main__':  # لاحظ الشرطات السفلية قبل وبعد الكلمات
+if __name__ == '__main__':
     try:
         bot.remove_webhook()
         bot.set_webhook(url=WEBHOOK_URL)
