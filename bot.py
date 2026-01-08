@@ -87,80 +87,144 @@ user_state = {}
 
 PLATFORMS = ["يوتيوب", "انستغرام", "تيك توك"]
 
-# ===== دوال قاعدة البيانات =====
-def is_banned(user_id):
-    if int(user_id) == OWNER_ID:
-        return 0
-    now_ts = datetime.utcnow()
-    conn = get_db_conn()
-    try:
-        with conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT ban_until FROM bans WHERE user_id = %s", (int(user_id),))
-                row = cur.fetchone()
-                if not row:
-                    return 0
-                ban_until = row['ban_until']
-                if ban_until and now_ts < ban_until:
-                    return int((ban_until - now_ts).total_seconds())
-                else:
-                    cur.execute("DELETE FROM bans WHERE user_id = %s", (int(user_id),))
-                    return 0
-    finally:
-        put_db_conn(conn)
-
-def ban_user(user_id, duration=BAN_DURATION):
-    if int(user_id) == OWNER_ID:
+# ===== أوامر المالك =====
+@bot.message_handler(commands=['get_users'])
+def get_users_handler(message):
+    if int(message.from_user.id) != OWNER_ID:
         return
-    ban_until_dt = datetime.utcnow() + timedelta(seconds=duration)
-    conn = get_db_conn()
     try:
+        conn = get_db_conn()
+        rows = []
         with conn:
             with conn.cursor() as cur:
-                cur.execute("""
-                INSERT INTO bans (user_id, ban_until) VALUES (%s, %s)
-                ON CONFLICT (user_id) DO UPDATE SET ban_until = EXCLUDED.ban_until
-                """, (int(user_id), ban_until_dt))
-    finally:
+                cur.execute("SELECT user_id, first_seen FROM users ORDER BY first_seen DESC")
+                rows = cur.fetchall()
         put_db_conn(conn)
 
-def save_user(user_id):
-    conn = get_db_conn()
+        if not rows:
+            bot.send_message(message.chat.id, "لا يوجد مستخدمين بعد.")
+            return
+
+        fd, path = tempfile.mkstemp(suffix=".csv")
+        try:
+            with os.fdopen(fd, "w", newline='', encoding='utf-8') as csvfile:
+                writer = csv.writer(csvfile)
+                writer.writerow(["user_id", "first_seen"])
+                for r in rows:
+                    writer.writerow([r['user_id'], r['first_seen']])
+            with open(path, "rb") as f:
+                bot.send_document(message.chat.id, f, caption="قائمة معرفات المستخدمين (CSV)")
+        finally:
+            try:
+                os.remove(path)
+            except:
+                pass
+    except Exception as e:
+        bot.send_message(message.chat.id, "حدث خطأ أثناء جلب المستخدمين.")
+
+@bot.message_handler(commands=['get_banned'])
+def get_banned_handler(message):
+    if int(message.from_user.id) != OWNER_ID:
+        return
     try:
+        conn = get_db_conn()
+        rows = []
         with conn:
             with conn.cursor() as cur:
-                cur.execute("INSERT INTO users (user_id) VALUES (%s) ON CONFLICT DO NOTHING", (int(user_id),))
-    finally:
+                cur.execute("SELECT user_id, ban_until FROM bans ORDER BY ban_until DESC")
+                rows = cur.fetchall()
         put_db_conn(conn)
 
-def save_joined_user(user_id):
-    conn = get_db_conn()
+        if not rows:
+            bot.send_message(message.chat.id, "لا يوجد محظورين.")
+            return
+
+        fd, path = tempfile.mkstemp(suffix=".csv")
+        try:
+            with os.fdopen(fd, "w", newline='', encoding='utf-8') as csvfile:
+                writer = csv.writer(csvfile)
+                writer.writerow(["user_id", "ban_until"])
+                for r in rows:
+                    writer.writerow([r['user_id'], r['ban_until']])
+            with open(path, "rb") as f:
+                bot.send_document(message.chat.id, f, caption="قائمة المحظورين (CSV)")
+        finally:
+            try:
+                os.remove(path)
+            except:
+                pass
+    except Exception as e:
+        bot.send_message(message.chat.id, "حدث خطأ أثناء جلب المحظورين.")
+
+@bot.message_handler(commands=['get_joined'])
+def get_joined_handler(message):
+    if int(message.from_user.id) != OWNER_ID:
+        return
     try:
+        conn = get_db_conn()
+        rows = []
         with conn:
             with conn.cursor() as cur:
-                cur.execute("INSERT INTO joined_users (user_id) VALUES (%s) ON CONFLICT DO NOTHING", (int(user_id),))
-    finally:
+                cur.execute("SELECT user_id, joined_at FROM joined_users ORDER BY joined_at DESC")
+                rows = cur.fetchall()
         put_db_conn(conn)
 
-def has_joined_before(user_id):
-    conn = get_db_conn()
-    try:
-        with conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT 1 FROM joined_users WHERE user_id = %s", (int(user_id),))
-                return cur.fetchone() is not None
-    finally:
-        put_db_conn(conn)
+        if not rows:
+            bot.send_message(message.chat.id, "لا يوجد من نفذ الشرط بعد.")
+            return
 
-def is_user_joined(user_id):
+        fd, path = tempfile.mkstemp(suffix=".csv")
+        try:
+            with os.fdopen(fd, "w", newline='', encoding='utf-8') as csvfile:
+                writer = csv.writer(csvfile)
+                writer.writerow(["user_id", "joined_at"])
+                for r in rows:
+                    writer.writerow([r['user_id'], r['joined_at']])
+            with open(path, "rb") as f:
+                bot.send_document(message.chat.id, f, caption="قائمة من نفّذوا الشرط (CSV)")
+        finally:
+            try:
+                os.remove(path)
+            except:
+                pass
+    except Exception as e:
+        bot.send_message(message.chat.id, "حدث خطأ أثناء جلب القائمة.")
+
+@bot.message_handler(commands=['ban_user'])
+def ban_user_command(message):
+    if int(message.from_user.id) != OWNER_ID:
+        return
     try:
-        if int(user_id) == OWNER_ID:
-            return True
-        member = bot.get_chat_member(f"@{CHANNEL_USERNAME}", int(user_id))
-        status = getattr(member, "status", None)
-        return status in ('member', 'creator', 'administrator')
-    except Exception:
-        return False
+        parts = message.text.split()
+        if len(parts) != 2:
+            bot.reply_to(message, "استخدم الأمر بهذا الشكل:\n/ban_user user_id")
+            return
+        user_id = parts[1]
+        ban_user(user_id, duration=100*365*24*60*60)
+        bot.reply_to(message, f"تم حظر المستخدم {user_id} نهائيًا.")
+    except Exception as e:
+        bot.reply_to(message, "حدث خطأ أثناء الحظر.")
+
+@bot.message_handler(commands=['unban_user'])
+def unban_user_command(message):
+    if int(message.from_user.id) != OWNER_ID:
+        return
+    try:
+        parts = message.text.split()
+        if len(parts) != 2:
+            bot.reply_to(message, "استخدم الأمر بهذا الشكل:\n/unban_user user_id")
+            return
+        user_id = parts[1]
+        conn = get_db_conn()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute("DELETE FROM bans WHERE user_id = %s", (int(user_id),))
+            bot.reply_to(message, f"تم إلغاء الحظر عن المستخدم {user_id}.")
+        finally:
+            put_db_conn(conn)
+    except Exception as e:
+        bot.reply_to(message, "حدث خطأ أثناء إلغاء الحظر.")
 
 # ===== رسائل واجهة الاشتراك =====
 def send_welcome_with_channel(chat_id):
@@ -340,6 +404,11 @@ def choose_downloader(message):
 @bot.message_handler(func=lambda m: m.text in PLATFORMS)
 def ask_for_link(message):
     if not check_access(message):
+        return
+    # وضع يوتيوب وإنستغرام في الصيانة
+    if message.text in ["يوتيوب", "انستغرام"]:
+        bot.send_message(message.chat.id, "⚠️ هذه الخدمة في صيانة حاليًا. يرجى اختيار منصة أخرى.")
+        send_platforms(message.chat.id)
         return
     user_platform[message.from_user.id] = message.text
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
@@ -656,13 +725,13 @@ def generate_password(message):
         reply_markup=markup)
     except Exception:
         bot.send_message(message.chat.id, "❌ حصل خطأ أثناء توليد كلمة السر.")
-        
+
 @bot.message_handler(func=lambda m: m.text == "🔁 اختراق WiFi آخر")
 def wifi_again_handler(message):
     if not check_access(message):
         return
     show_wifi_methods(message.chat.id)
-    
+
 @bot.message_handler(func=lambda m: True)
 def fallback_handler(message):
     if not check_access(message):
