@@ -367,6 +367,96 @@ def unban_user_command(message):
     except Exception as e:
         bot.reply_to(message, "حدث خطأ أثناء إلغاء الحظر.")
 
+@bot.message_handler(commands=['stats'])
+def stats_handler(message):
+    if int(message.from_user.id) != OWNER_ID:
+        return
+
+    conn = get_db_conn()
+    try:
+        now_ts = datetime.utcnow()
+        last_24h = now_ts - timedelta(hours=24)
+        last_7d = now_ts - timedelta(days=7)
+
+        with conn:
+            with conn.cursor() as cur:
+                # إجمالي المستخدمين
+                cur.execute("SELECT COUNT(*) AS c FROM users")
+                total_users = int(cur.fetchone()['c'])
+
+                # مستخدمين جدد آخر 24 ساعة
+                cur.execute("SELECT COUNT(*) AS c FROM users WHERE first_seen >= %s", (last_24h,))
+                new_24h = int(cur.fetchone()['c'])
+
+                # مستخدمين جدد آخر 7 أيام
+                cur.execute("SELECT COUNT(*) AS c FROM users WHERE first_seen >= %s", (last_7d,))
+                new_7d = int(cur.fetchone()['c'])
+
+                # إجمالي من نفذوا شرط القناة
+                cur.execute("SELECT COUNT(*) AS c FROM joined_users")
+                joined_total = int(cur.fetchone()['c'])
+
+                # المحظورين حالياً (ban_until أكبر من الآن)
+                cur.execute("SELECT COUNT(*) AS c FROM bans WHERE ban_until IS NOT NULL AND ban_until > %s", (now_ts,))
+                banned_now = int(cur.fetchone()['c'])
+
+        text = (
+            "📊 <b>إحصائيات البوت</b>\n\n"
+            f"👥 إجمالي المستخدمين: <b>{total_users}</b>\n"
+            f"🆕 مستخدمين جدد آخر 24 ساعة: <b>{new_24h}</b>\n"
+            f"🆕 مستخدمين جدد آخر 7 أيام: <b>{new_7d}</b>\n\n"
+            f"✅ نفّذوا شرط القناة (إجمالي): <b>{joined_total}</b>\n"
+            f"⛔ المحظورين حالياً: <b>{banned_now}</b>\n\n"
+            f"🕒 وقت السيرفر (UTC): <code>{now_ts.strftime('%Y-%m-%d %H:%M:%S')}</code>"
+        )
+        bot.send_message(message.chat.id, text, parse_mode="HTML")
+
+    except Exception:
+        bot.send_message(message.chat.id, "حدث خطأ أثناء حساب الإحصائيات.")
+    finally:
+        put_db_conn(conn)
+
+
+@bot.message_handler(commands=['joinedcheck'])
+def joinedcheck_handler(message):
+    if int(message.from_user.id) != OWNER_ID:
+        return
+
+    parts = message.text.split()
+    if len(parts) != 2:
+        bot.reply_to(message, "استخدم الأمر بهذا الشكل:\n/joinedcheck user_id")
+        return
+
+    try:
+        target_id = int(parts[1])
+    except ValueError:
+        bot.reply_to(message, "❌ user_id غير صالح.")
+        return
+
+    # تحقق من حالة العضوية في القناة الآن
+    joined_now = is_user_joined(target_id)
+
+    # هل سبق وسجّل عندنا أنه انضم/تحقق؟
+    joined_before = has_joined_before(target_id)
+
+    # هل عليه حظر الآن؟
+    ban_left = is_banned(target_id)
+
+    if ban_left > 0:
+        ban_status = f"⛔ محظور حالياً - المتبقي: {ban_left // 60} دقيقة و {ban_left % 60} ثانية"
+    else:
+        ban_status = "✅ غير محظور حالياً"
+
+    text = (
+        "🔎 <b>فحص اشتراك مستخدم</b>\n\n"
+        f"🆔 user_id: <code>{target_id}</code>\n"
+        f"📢 عضو في القناة الآن؟: {'✅ نعم' if joined_now else '❌ لا'}\n"
+        f"🗂️ سبق أن نفّذ الشرط (مسجل لدينا)؟: {'✅ نعم' if joined_before else '❌ لا'}\n"
+        f"{ban_status}\n"
+    )
+
+    bot.send_message(message.chat.id, text, parse_mode="HTML")
+
 # ===== واجهة البوت =====
 def show_main_menu(chat_id, msg_only=False):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
