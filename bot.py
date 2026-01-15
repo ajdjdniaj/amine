@@ -747,17 +747,26 @@ def extract_ssids_from_text(text):
     return re.findall(r'(fh_[a-zA-Z0-9]+(?:_[a-zA-Z0-9]+)?)', text)
 
 def smart_correct_ssid(ssid):
-    parts = ssid.split('') 
-    if len(parts) >= 2:
-        ssid = f"{parts[0]}{parts[1]}"
+    # تنظيف بسيط
+    ssid = (ssid or "").strip()
+
+    # إذا جاء النص بصيغة فيها فراغات/سطر جديد، خذه كما هو بدون تفكيك غريب
+    # (لا تستخدم split('') لأنه خطأ في بايثون)
+
     if ssid.startswith("fh_"):
         prefix = "fh_"
         rest = ssid[3:]
+
+        # تصحيح أخطاء OCR الشائعة
         rest = rest.replace('l', '1').replace('I', '1')
         rest = rest.replace('O', '0').replace('o', '0')
+
+        # تصحيح خاص حسب منطقك القديم
         if len(rest) == 6 and rest[3] == '0':
             rest = rest[:3] + 'a' + rest[4:]
+
         return prefix + rest
+
     return ssid
 
 @bot.message_handler(content_types=['photo'])
